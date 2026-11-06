@@ -31,7 +31,7 @@ android {
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
         versionCode = flutter.versionCode
-        versionName = "1.5.0"
+        versionName = "1.5.1-beta1"
     }
 
     // CI keeps signing material in the ephemeral runner; local signing.properties still works.

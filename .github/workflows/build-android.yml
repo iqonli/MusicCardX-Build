@@ -187,7 +187,8 @@ jobs:
               cert=match.group(1).replace(':','').lower()
               certs.append(cert)
               badging=subprocess.run([str(aapt),'dump','badging',str(src)],check=True,capture_output=True,text=True).stdout.splitlines()[0]
-              if "versionName='1.5.0'" not in badging:
+              expected_version_name=version.split("+",1)[0]
+              if f"versionName='{expected_version_name}'" not in badging:
                   raise SystemExit(f'Unexpected versionName: {badging}')
               dest=outdir/destname
               shutil.copy2(src,dest)
