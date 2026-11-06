@@ -2,6 +2,12 @@ name: Build MusicCardX APKs
 
 on:
   workflow_dispatch:
+    inputs:
+      build_x86_64:
+        description: Also build x86_64 APK (for official release)
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -19,6 +25,7 @@ jobs:
     env:
       PUB_HOSTED_URL: https://pub.dev
       FLUTTER_STORAGE_BASE_URL: https://storage.googleapis.com
+      BUILD_X86_64: ${{ github.event_name == 'workflow_dispatch' && inputs.build_x86_64 || false }}
       MCX_KEYSTORE_B64: ${{ secrets.MCX_KEYSTORE_B64 }}
       MCX_STORE_PASSWORD: ${{ secrets.MCX_STORE_PASSWORD }}
       MCX_KEY_PASSWORD: ${{ secrets.MCX_KEY_PASSWORD }}
@@ -64,6 +71,9 @@ jobs:
           test -s third_party/mcx_background/CMakeLists.txt
           test -s third_party/mcx_background/src/mcx_api.cpp
           test -s third_party/mcx_background/android/build.gradle
+          for src in lib/activity_catalog.dart lib/cover_preparation.dart lib/intent_actions.dart lib/intent_tutorial.dart lib/seed_backgrounds.dart lib/shortcut_flow.dart LICENSES/GPL-3.0-only.txt; do
+            test -s "$src" || { echo "Missing required source file: $src" >&2; exit 1; }
+          done
           : "${MCX_KEYSTORE_B64:?Missing MCX_KEYSTORE_B64 secret}"
           : "${MCX_STORE_PASSWORD:?Missing MCX_STORE_PASSWORD secret}"
           : "${MCX_KEY_PASSWORD:?Missing MCX_KEY_PASSWORD secret}"
@@ -118,12 +128,17 @@ jobs:
           chmod 600 "$keyfile"
           echo "MCX_KEYSTORE_PATH=$keyfile" >> "$GITHUB_ENV"
 
-      - name: Build signed release APKs for ARM64 and x86_64
+      - name: Build signed release APKs (ARM64 default, optional x86_64)
         shell: bash
         run: |
           set -euo pipefail
+          targets=android-arm64
+          if [[ "$BUILD_X86_64" == "true" ]]; then
+            targets=android-arm64,android-x64
+          fi
+          echo "Building target platforms: $targets"
           flutter build apk --release --split-per-abi \
-            --target-platform android-arm64,android-x64 \
+            --target-platform "$targets" \
             --no-pub 2>&1 | tee "$RUNNER_TEMP/flutter-build.log"
 
       - name: Verify APK ABI, native plugin and certificate; stage output
@@ -146,8 +161,12 @@ jobs:
           outdir.mkdir(parents=True, exist_ok=True)
           expected = {
               'arm64-v8a': ('app-arm64-v8a-release.apk', f'MusicCardX-{version}-arm64-v8a.apk'),
-              'x86_64': ('app-x86_64-release.apk', f'MusicCardX-{version}-x86_64.apk'),
           }
+          if os.environ.get('BUILD_X86_64', '').lower() == 'true':
+              expected['x86_64'] = (
+                  'app-x86_64-release.apk',
+                  f'MusicCardX-{version}-x86_64.apk',
+              )
           certs=[]
           sdk=Path(os.environ['ANDROID_HOME'])
           apksigner=sdk/'build-tools/36.0.0/apksigner'
@@ -173,14 +192,14 @@ jobs:
               dest=outdir/destname
               shutil.copy2(src,dest)
               print(f'VALID: {dest.name} (ABI {abi}, C++ plugin, APK signature; cert {cert})')
-          if len(set(certs)) != 1: raise SystemExit('ARM64 and x86_64 have different signing certificates')
+          if len(set(certs)) != 1: raise SystemExit('Built APKs have different signing certificates')
           e=os.environ.get('EXPECTED_CERT','').replace(':','').strip().lower()
           if e and e != certs[0]: raise SystemExit(f'Certificate mismatch: actual {certs[0]}, expected {e}')
           sums=outdir/'SHA256SUMS.txt'
           with sums.open('w',encoding='utf-8') as f:
               for path in sorted(outdir.glob('*.apk')):
                   f.write(hashlib.sha256(path.read_bytes()).hexdigest()+'  '+path.name+'\n')
-          print('Both signed APKs verified; SHA256SUMS.txt generated')
+          print(f'{len(expected)} signed APK(s) verified; SHA256SUMS.txt generated')
           PY
 
       - name: Upload ARM64 signed APK
@@ -193,6 +212,7 @@ jobs:
           compression-level: 0
 
       - name: Upload x86_64 signed APK
+        if: env.BUILD_X86_64 == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: MusicCardX-x86_64-signed
