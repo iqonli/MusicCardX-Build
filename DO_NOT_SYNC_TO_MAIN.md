@@ -9,7 +9,7 @@
 | Build 仓库路径 | 原因 | 处理方式 |
 | --- | --- | --- |
 | `.github/workflows/build-android.yml` | Build 仓库专用的 Android CI：自动构建、签名、ABI 检查、保留 3 天的 APK Artifact。 | 保留在 Build；除非明确要在主仓库部署同一工作流，否则不复制。 |
-| `.github/workflows/publish-release.yml` | 从 Build 仓库指定的 Actions Run 下载 ARM64 和 x86_64 APK，并发布到 **当前仓库** Release。 | 不直接复制到主仓库；若要跨仓库发布，须重新设计仓库目标、权限及下载逻辑。 |
+| `.github/workflows/publish-release.yml` | 从 Build 的 Actions Run 下载两个 APK，使用 `MCX_MAIN_RELEASE_TOKEN` 向正式仓库 `iqonli/MusicCardX` 创建 Release。 | 仍属于 Build 专用发布流水线，主仓库不必复制；参见 `OFFICIAL_RELEASE_SETUP.md`。 |
 | `BUILD_SETUP.md` | Build 仓库专用的 CI 初始化、签名 Secrets 和发布操作说明。 | 仅留在 Build。 |
 | `docs/1.5.1-beta1.md` | 1.5.1 预发布测试期间的中间变更记录。 | 正式版同步时默认跳过；需保留历史时再单独决定。 |
 
