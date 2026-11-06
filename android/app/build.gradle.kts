@@ -34,7 +34,26 @@ android {
         versionName = "1.5.0"
     }
 
-    signingConfigs { create("musiccardx") { if(releaseKey.isNotEmpty()) { storeFile=rootProject.file(releaseKey.getProperty("storeFile"));storePassword=releaseKey.getProperty("storePassword");keyAlias=releaseKey.getProperty("keyAlias");keyPassword=releaseKey.getProperty("keyPassword") } } }
+    // CI keeps signing material in the ephemeral runner; local signing.properties still works.
+    signingConfigs {
+        create("musiccardx") {
+            val ciStoreFile = System.getenv("MCX_KEYSTORE_PATH")
+            val ciStorePassword = System.getenv("MCX_STORE_PASSWORD")
+            val ciKeyPassword = System.getenv("MCX_KEY_PASSWORD")
+            val ciKeyAlias = System.getenv("MCX_KEY_ALIAS") ?: "iqonli-1"
+            if (!ciStoreFile.isNullOrBlank() && !ciStorePassword.isNullOrEmpty() && !ciKeyPassword.isNullOrEmpty()) {
+                storeFile = file(ciStoreFile)
+                storePassword = ciStorePassword
+                keyAlias = ciKeyAlias
+                keyPassword = ciKeyPassword
+            } else if (releaseKey.isNotEmpty()) {
+                storeFile = rootProject.file(releaseKey.getProperty("storeFile"))
+                storePassword = releaseKey.getProperty("storePassword")
+                keyAlias = releaseKey.getProperty("keyAlias")
+                keyPassword = releaseKey.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false

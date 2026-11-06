@@ -1,0 +1,93 @@
+name: Publish Release from an Actions run
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Build MusicCardX APKs run ID
+        required: true
+        type: string
+      tag:
+        description: Release tag, e.g. v1.5.0
+        required: true
+        type: string
+      prerelease:
+        description: Mark this release as a prerelease
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ inputs.run_id }}
+      TAG: ${{ inputs.tag }}
+      IS_PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - name: Verify source workflow run
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo 'run_id must be an integer' >&2; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([_-][A-Za-z0-9.-]+)?$ ]] || { echo 'Use a tag such as v1.5.0 or v1.5.0-beta2' >&2; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" > "$RUNNER_TEMP/source-run.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" '
+            .repository.full_name == $repo and
+            .head_repository.full_name == $repo and
+            .head_branch == "main" and
+            .conclusion == "success" and
+            .name == "Build MusicCardX APKs" and
+            (.event == "push" or .event == "workflow_dispatch")
+          ' "$RUNNER_TEMP/source-run.json"
+          SHA="$(jq -r '.head_sha' "$RUNNER_TEMP/source-run.json")"
+          [[ "$SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          echo "SOURCE_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "Source run: $RUN_ID / commit: $SHA"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to overwrite" >&2
+            exit 1
+          fi
+
+      - name: Download ARM64 from the selected run
+        uses: actions/download-artifact@v4
+        with:
+          name: MusicCardX-ARM64-signed
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release-assets
+
+      - name: Download x86_64 from the selected run
+        uses: actions/download-artifact@v4
+        with:
+          name: MusicCardX-x86_64-signed
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release-assets
+
+      - name: Verify both assets and prepare checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          arm64=(release-assets/MusicCardX-*-arm64-v8a.apk)
+          x64=(release-assets/MusicCardX-*-x86_64.apk)
+          (( ${#arm64[@]} == 1 && ${#x64[@]} == 1 )) || { echo 'Two matching ABI APKs required' >&2; exit 1; }
+          (cd release-assets && sha256sum *.apk > SHA256SUMS.txt)
+          ls -lh release-assets/*.apk release-assets/SHA256SUMS.txt
+
+      - name: Create GitHub Release with artifacts from Actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--title "$TAG" --target "$SOURCE_SHA" --notes "Built by GitHub Actions run #$RUN_ID from $SOURCE_SHA. The Release contains the original signed ARM64 and x86_64 APKs from that run.")
+          if [[ "$IS_PRERELEASE" == 'true' ]]; then args+=(--prerelease); fi
+          gh release create "$TAG" release-assets/*.apk release-assets/SHA256SUMS.txt "${args[@]}"
+          echo "Created release: $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Source build: $RUN_ID" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,231 @@
+name: Build MusicCardX APKs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: musiccardx-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      PUB_HOSTED_URL: https://pub.dev
+      FLUTTER_STORAGE_BASE_URL: https://storage.googleapis.com
+      MCX_KEYSTORE_B64: ${{ secrets.MCX_KEYSTORE_B64 }}
+      MCX_STORE_PASSWORD: ${{ secrets.MCX_STORE_PASSWORD }}
+      MCX_KEY_PASSWORD: ${{ secrets.MCX_KEY_PASSWORD }}
+      MCX_KEY_ALIAS: iqonli-1
+      MCX_EXPECTED_CERT_SHA256: ${{ secrets.MCX_EXPECTED_CERT_SHA256 }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Flutter 3.47.9
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.47.9'
+          cache: true
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Install Android SDK, NDK, and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platforms;android-36' \
+            'build-tools;36.0.0' \
+            'ndk;28.2.13676358' \
+            'cmake;3.22.1'
+
+      - name: Check native plugin and signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s third_party/mcx_background/CMakeLists.txt
+          test -s third_party/mcx_background/src/mcx_api.cpp
+          test -s third_party/mcx_background/android/build.gradle
+          : "${MCX_KEYSTORE_B64:?Missing MCX_KEYSTORE_B64 secret}"
+          : "${MCX_STORE_PASSWORD:?Missing MCX_STORE_PASSWORD secret}"
+          : "${MCX_KEY_PASSWORD:?Missing MCX_KEY_PASSWORD secret}"
+          flutter --version
+          java -version
+
+      - name: Fetch Flutter dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get
+
+      - name: Make Gradle launcher available
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The upstream source archive excludes gradlew and gradle-wrapper.jar.
+          # CI provides the pinned Gradle version via setup-gradle.
+          if [[ ! -f android/gradlew ]]; then
+            cat > android/gradlew <<'SH'
+          #!/usr/bin/env sh
+          cd "$(dirname "$0")" || exit 1
+          exec gradle "$@"
+          SH
+          fi
+          chmod +x android/gradlew
+
+      - name: Flutter analyze (report only)
+        id: analyze
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter analyze --no-pub 2>&1 | tee "$RUNNER_TEMP/flutter-analyze.log"
+
+      - name: Flutter test (report only)
+        id: test
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test --no-pub 2>&1 | tee "$RUNNER_TEMP/flutter-test.log"
+
+      - name: Prepare original iqonli-1 signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          keyfile="$RUNNER_TEMP/musiccardx-release.jks"
+          printf '%s' "$MCX_KEYSTORE_B64" | base64 --decode > "$keyfile"
+          test -s "$keyfile"
+          chmod 600 "$keyfile"
+          echo "MCX_KEYSTORE_PATH=$keyfile" >> "$GITHUB_ENV"
+
+      - name: Build signed release APKs for ARM64 and x86_64
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build apk --release --split-per-abi \
+            --target-platform android-arm64,android-x64 \
+            --no-pub 2>&1 | tee "$RUNNER_TEMP/flutter-build.log"
+
+      - name: Verify APK ABI, native plugin and certificate; stage output
+        shell: bash
+        env:
+          EXPECTED_CERT: ${{ secrets.MCX_EXPECTED_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, shutil, subprocess, hashlib
+          from pathlib import Path
+          from zipfile import ZipFile
+          pubspec = Path('pubspec.yaml').read_text(encoding='utf-8')
+          v = re.search(r'^version:\s*([^\s#]+)', pubspec, re.M)
+          if not v:
+              raise SystemExit('Missing version in pubspec.yaml')
+          version = v.group(1)
+          srcdir = Path('build/app/outputs/flutter-apk')
+          outdir = Path(os.environ['RUNNER_TEMP']) / 'mcx-apks'
+          outdir.mkdir(parents=True, exist_ok=True)
+          expected = {
+              'arm64-v8a': ('app-arm64-v8a-release.apk', f'MusicCardX-{version}-arm64-v8a.apk'),
+              'x86_64': ('app-x86_64-release.apk', f'MusicCardX-{version}-x86_64.apk'),
+          }
+          certs=[]
+          sdk=Path(os.environ['ANDROID_HOME'])
+          apksigner=sdk/'build-tools/36.0.0/apksigner'
+          aapt=sdk/'build-tools/36.0.0/aapt'
+          for abi,(srcname,destname) in expected.items():
+              src=srcdir/srcname
+              if not src.is_file(): raise SystemExit(f'Missing {src}')
+              with ZipFile(src) as z:
+                  native_abis={p.split('/')[1] for p in z.namelist() if p.startswith('lib/') and p.endswith('.so') and len(p.split('/')) >= 3}
+                  if native_abis != {abi}:
+                      raise SystemExit(f'{srcname}: expected only {abi}, got {sorted(native_abis)}')
+                  lib=f'lib/{abi}/libmcx_background.so'
+                  if lib not in z.namelist():
+                      raise SystemExit(f'{srcname}: missing {lib}')
+              info=subprocess.run([str(apksigner),'verify','--verbose','--print-certs',str(src)],check=True,capture_output=True,text=True).stdout
+              match=re.search(r'Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F:]+)',info)
+              if not match: raise SystemExit(f'No certificate digest in {srcname}')
+              cert=match.group(1).replace(':','').lower()
+              certs.append(cert)
+              badging=subprocess.run([str(aapt),'dump','badging',str(src)],check=True,capture_output=True,text=True).stdout.splitlines()[0]
+              if "versionName='1.5.0'" not in badging:
+                  raise SystemExit(f'Unexpected versionName: {badging}')
+              dest=outdir/destname
+              shutil.copy2(src,dest)
+              print(f'VALID: {dest.name} (ABI {abi}, C++ plugin, APK signature; cert {cert})')
+          if len(set(certs)) != 1: raise SystemExit('ARM64 and x86_64 have different signing certificates')
+          e=os.environ.get('EXPECTED_CERT','').replace(':','').strip().lower()
+          if e and e != certs[0]: raise SystemExit(f'Certificate mismatch: actual {certs[0]}, expected {e}')
+          sums=outdir/'SHA256SUMS.txt'
+          with sums.open('w',encoding='utf-8') as f:
+              for path in sorted(outdir.glob('*.apk')):
+                  f.write(hashlib.sha256(path.read_bytes()).hexdigest()+'  '+path.name+'\n')
+          print('Both signed APKs verified; SHA256SUMS.txt generated')
+          PY
+
+      - name: Upload ARM64 signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicCardX-ARM64-signed
+          path: ${{ runner.temp }}/mcx-apks/*arm64-v8a.apk
+          retention-days: 3
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Upload x86_64 signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicCardX-x86_64-signed
+          path: ${{ runner.temp }}/mcx-apks/*x86_64.apk
+          retention-days: 3
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Report test results and upload logs
+        if: always()
+        shell: bash
+        env:
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          set -euo pipefail
+          echo "### MusicCardX CI" >> "$GITHUB_STEP_SUMMARY"
+          echo "- flutter analyze: $ANALYZE_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          echo "- flutter test: $TEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Source commit: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/mcx-report"
+          for name in flutter-analyze flutter-test flutter-build; do
+            test ! -f "$RUNNER_TEMP/$name.log" || cp "$RUNNER_TEMP/$name.log" "$RUNNER_TEMP/mcx-report/"
+          done
+          if [[ -d "$RUNNER_TEMP/mcx-apks" ]]; then
+            test ! -f "$RUNNER_TEMP/mcx-apks/SHA256SUMS.txt" || cp "$RUNNER_TEMP/mcx-apks/SHA256SUMS.txt" "$RUNNER_TEMP/mcx-report/"
+          fi
+
+      - name: Upload CI report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicCardX-build-report
+          path: ${{ runner.temp }}/mcx-report/
+          retention-days: 3
+          if-no-files-found: ignore
