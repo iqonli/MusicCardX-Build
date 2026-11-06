@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       RUN_ID: ${{ inputs.run_id }}
       TAG: ${{ inputs.tag }}
       IS_PRERELEASE: ${{ inputs.prerelease }}
