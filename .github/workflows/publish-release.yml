@@ -1,4 +1,4 @@
-name: Publish Release from an Actions run
+name: Publish signed APKs to official MusicCardX
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 jobs:
   publish:
@@ -28,6 +28,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      TARGET_REPO: iqonli/MusicCardX
       RUN_ID: ${{ inputs.run_id }}
       TAG: ${{ inputs.tag }}
       IS_PRERELEASE: ${{ inputs.prerelease }}
@@ -51,10 +52,52 @@ jobs:
           [[ "$SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           echo "SOURCE_SHA=$SHA" >> "$GITHUB_ENV"
           echo "Source run: $RUN_ID / commit: $SHA"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; refusing to overwrite" >&2
+          source_version="$(gh api "repos/$GITHUB_REPOSITORY/contents/pubspec.yaml?ref=$SHA" --jq '.content' | base64 --decode | sed -nE 's/^version:[[:space:]]*([^+[:space:]#]+).*/\1/p')"
+          if [[ -z "$source_version" || "$TAG" != "v$source_version" ]]; then
+            echo "Release tag $TAG does not match build source version $source_version" >&2
             exit 1
           fi
+
+      - name: Verify official repository source and publishing credentials
+        shell: bash
+        env:
+          MAIN_RELEASE_TOKEN: ${{ secrets.MCX_MAIN_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MAIN_RELEASE_TOKEN:-}" ]]; then
+            echo "Missing Actions secret MCX_MAIN_RELEASE_TOKEN in MusicCardX-Build." >&2
+            echo "Create a fine-grained PAT scoped to iqonli/MusicCardX with Contents: Read and write." >&2
+            exit 1
+          fi
+          MAIN_SHA="$(GH_TOKEN="$MAIN_RELEASE_TOKEN" gh api "repos/$TARGET_REPO/branches/main" --jq '.commit.sha')"
+          [[ "$MAIN_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+
+          gh api "repos/$GITHUB_REPOSITORY/git/trees/$SOURCE_SHA?recursive=1" > "$RUNNER_TEMP/build-source-tree.json"
+          GH_TOKEN="$MAIN_RELEASE_TOKEN" gh api "repos/$TARGET_REPO/git/trees/$MAIN_SHA?recursive=1" > "$RUNNER_TEMP/official-source-tree.json"
+          jq -e '.truncated == false' "$RUNNER_TEMP/build-source-tree.json" >/dev/null
+          jq -e '.truncated == false' "$RUNNER_TEMP/official-source-tree.json" >/dev/null
+
+          # Compare all compiled app/plugin/dependency files. Gradle signing
+          # configuration is allowed to differ between Build and official.
+          filter='
+            .tree | map(select(.type == "blob"))
+            | map(select((.path | test("^(lib/|third_party/|assets/|android/)")) or
+                         .path == "pubspec.yaml" or .path == "pubspec.lock"))
+            | map(select(.path != "android/app/build.gradle.kts"))
+            | map("\(.path)\t\(.sha)") | sort | .[]
+          '
+          jq -r "$filter" "$RUNNER_TEMP/build-source-tree.json" > "$RUNNER_TEMP/build-files.txt"
+          jq -r "$filter" "$RUNNER_TEMP/official-source-tree.json" > "$RUNNER_TEMP/official-files.txt"
+          if ! diff -u "$RUNNER_TEMP/build-files.txt" "$RUNNER_TEMP/official-files.txt"; then
+            echo "Official app sources do not match the chosen APK build. Sync source before publishing." >&2
+            exit 1
+          fi
+          if GH_TOKEN="$MAIN_RELEASE_TOKEN" gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
+            echo "Official release $TAG already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+          echo "RELEASE_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
+          echo "Validated official source at $MAIN_SHA against APK build $SOURCE_SHA"
 
       - name: Download ARM64 from the selected run
         uses: actions/download-artifact@v4
@@ -83,29 +126,18 @@ jobs:
           (cd release-assets && sha256sum *.apk > SHA256SUMS.txt)
           ls -lh release-assets/*.apk release-assets/SHA256SUMS.txt
 
-      - name: Create GitHub Release with artifacts from Actions
+      - name: Publish verified APKs to iqonli/MusicCardX
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MCX_MAIN_RELEASE_TOKEN }}
+          GH_REPO: iqonli/MusicCardX
         run: |
           set -euo pipefail
-          # GitHub's built-in token cannot create a Release targeting a commit
-          # whose .github/workflows files differ from the default branch.
-          # Use the latest main commit as the release tag target ONLY when the
-          # source-to-main diff is restricted to the release workflow and docs.
-          HEAD_SHA="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
-          gh api "repos/$GITHUB_REPOSITORY/compare/$SOURCE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/release-compare.json"
-          if ! jq -e '
-            (.status == "identical" or .status == "ahead") and
-            (.files | length < 300) and
-            all(.files[]; .filename == ".github/workflows/publish-release.yml" or .filename == "DO_NOT_SYNC_TO_MAIN.md")
-          ' "$RUNNER_TEMP/release-compare.json"; then
-            echo "Application source changed after build. Refusing to publish APKs under a different source revision." >&2
-            echo "Build again from the latest main commit, or use a token with Workflows:write to tag the exact build SHA." >&2
-            exit 1
-          fi
-          echo "APK source commit: $SOURCE_SHA"
-          echo "Release tag target: $HEAD_SHA"
-          args=(--title "$TAG" --target "$HEAD_SHA" --notes "APK source: GitHub Actions run #$RUN_ID, commit $SOURCE_SHA. Release tag target: $HEAD_SHA (only release workflow and documentation changed since the build). Includes signed ARM64 and x86_64 APKs from the verified run.")
+          : "${GH_TOKEN:?Missing MCX_MAIN_RELEASE_TOKEN}"
+          : "${RELEASE_SHA:?Official source verification did not complete}"
+          args=(--repo "$TARGET_REPO" --title "$TAG" --target "$RELEASE_SHA"
+                --notes "Official MusicCardX release. Signed ARM64-v8a and x86_64 APKs from MusicCardX-Build Actions run #$RUN_ID (build source $SOURCE_SHA). Official source commit: $RELEASE_SHA.")
           if [[ "$IS_PRERELEASE" == 'true' ]]; then args+=(--prerelease); fi
           gh release create "$TAG" release-assets/*.apk release-assets/SHA256SUMS.txt "${args[@]}"
-          echo "Created release: $TAG" >> "$GITHUB_STEP_SUMMARY"
-          echo "Source build: $RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "Official release: https://github.com/$TARGET_REPO/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK build run: $RUN_ID / source commit: $SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
