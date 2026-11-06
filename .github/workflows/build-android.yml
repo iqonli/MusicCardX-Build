@@ -25,7 +25,7 @@ jobs:
     env:
       PUB_HOSTED_URL: https://pub.dev
       FLUTTER_STORAGE_BASE_URL: https://storage.googleapis.com
-      BUILD_X86_64: ${{ github.event_name == 'workflow_dispatch' && inputs.build_x86_64 || false }}
+      BUILD_X86_64: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_x86_64) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[build-both-abis]')) }}
       MCX_KEYSTORE_B64: ${{ secrets.MCX_KEYSTORE_B64 }}
       MCX_STORE_PASSWORD: ${{ secrets.MCX_STORE_PASSWORD }}
       MCX_KEY_PASSWORD: ${{ secrets.MCX_KEY_PASSWORD }}
