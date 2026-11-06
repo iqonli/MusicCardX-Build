@@ -87,7 +87,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=(--title "$TAG" --target "$SOURCE_SHA" --notes "Built by GitHub Actions run #$RUN_ID from $SOURCE_SHA. The Release contains the original signed ARM64 and x86_64 APKs from that run.")
+          # GitHub's built-in token cannot create a Release targeting a commit
+          # whose .github/workflows files differ from the default branch.
+          # Use the latest main commit as the release tag target ONLY when the
+          # source-to-main diff is restricted to the release workflow and docs.
+          HEAD_SHA="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          gh api "repos/$GITHUB_REPOSITORY/compare/$SOURCE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/release-compare.json"
+          if ! jq -e '
+            (.status == "identical" or .status == "ahead") and
+            (.files | length < 300) and
+            all(.files[]; .filename == ".github/workflows/publish-release.yml" or .filename == "DO_NOT_SYNC_TO_MAIN.md")
+          ' "$RUNNER_TEMP/release-compare.json"; then
+            echo "Application source changed after build. Refusing to publish APKs under a different source revision." >&2
+            echo "Build again from the latest main commit, or use a token with Workflows:write to tag the exact build SHA." >&2
+            exit 1
+          fi
+          echo "APK source commit: $SOURCE_SHA"
+          echo "Release tag target: $HEAD_SHA"
+          args=(--title "$TAG" --target "$HEAD_SHA" --notes "APK source: GitHub Actions run #$RUN_ID, commit $SOURCE_SHA. Release tag target: $HEAD_SHA (only release workflow and documentation changed since the build). Includes signed ARM64 and x86_64 APKs from the verified run.")
           if [[ "$IS_PRERELEASE" == 'true' ]]; then args+=(--prerelease); fi
           gh release create "$TAG" release-assets/*.apk release-assets/SHA256SUMS.txt "${args[@]}"
           echo "Created release: $TAG" >> "$GITHUB_STEP_SUMMARY"
