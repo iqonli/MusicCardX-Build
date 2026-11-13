@@ -896,7 +896,8 @@ class _FontLibraryState extends State<FontLibraryPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (PlatformIO.windows) return Scaffold(
+    if (PlatformIO.windows) {
+      return Scaffold(
       appBar: AppBar(title: const Text('系统字体'), actions: [IconButton(onPressed: () => run(repo.refresh), icon: const Icon(Icons.refresh))]),
       body: Column(children: [Padding(padding: const EdgeInsets.all(12), child: TextField(decoration: const InputDecoration(labelText:'筛选字体'), onChanged:(s)=>setState(()=>query=s.toLowerCase()))), Expanded(child: ListView(children:[
         if(widget.selecting) ListTile(title:const Text('系统默认'),onTap:()=>Navigator.pop(context,'')),
@@ -906,7 +907,8 @@ class _FontLibraryState extends State<FontLibraryPage> {
           trailing:IconButton(tooltip:'预览',icon:const Icon(Icons.preview_outlined),onPressed:()=>Navigator.push<void>(context,MaterialPageRoute(builder:(_)=>FontPreviewPage(row:row)))),
         ),
       ]))]),
-    );
+      );
+    }
     final groups = <String, List<Map<String, dynamic>>>{};
     for (final r in repo.rows) {
       if ('${r['family']} ${r['subfamily']} ${r['fullName']} ${r['fileName']}'

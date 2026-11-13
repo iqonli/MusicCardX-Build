@@ -66,11 +66,13 @@ class CardDocument {
     enforceDisabledSongFields();
   }
   void normalizeBackgrounds() {
-    if (data['backgroundStyle'] == 'fusion')
+    if (data['backgroundStyle'] == 'fusion') {
       data['backgroundStyle'] = 'fusionClassic';
+    }
     final mode = text('backgroundStyle');
-    if (!backgrounds.containsKey(mode))
+    if (!backgrounds.containsKey(mode)) {
       data['backgroundStyle'] = 'fusionClassic';
+    }
     final saved = mapv(data['backgroundBlurStrengths']);
     final current = text('backgroundStyle');
     data['backgroundBlurStrengths'] = {
@@ -183,8 +185,9 @@ class CardDocument {
     final d = CardDocument.fresh();
     final fontDefaults = mapv(d.data['fontPreferences']);
     d.data.addAll(raw);
-    if (!raw.containsKey('backgroundBlurStrengths'))
+    if (!raw.containsKey('backgroundBlurStrengths')) {
       d.data['backgroundBlurStrengths'] = <String, dynamic>{};
+    }
     d.data['fontPreferences'] = {
       ...fontDefaults,
       ...mapv(raw['fontPreferences']),
