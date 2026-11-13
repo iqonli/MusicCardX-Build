@@ -310,10 +310,10 @@ void main() {
       final repo = FontRepository.instance;
       final base = await Directory.systemTemp.createTemp('font-source-parity');
       final bytes = await File(
-        '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+        'test/fixtures/fonts/Regular.ttf',
       ).readAsBytes();
       final hash = sha256.convert(bytes).toString();
-      final row = Sfnt.inspect(bytes, 'DejaVuSans.ttf').single;
+      final row = Sfnt.inspect(bytes, 'Regular.ttf').single;
       final localPath = '${base.path}/$hash.font';
       await File(localPath).writeAsBytes(bytes);
       await File('${base.path}/$hash.cache').writeAsBytes(bytes);

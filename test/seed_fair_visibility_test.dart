@@ -71,7 +71,7 @@ void main() {
       await t.pumpAndSettle();
       final hex = find.byType(TextFormField).last;
       await t.enterText(hex, 'r%10+#12AB34');
-      await t.tap(find.text('确定'));
+      await t.tap(find.text('保存'));
       await t.pumpAndSettle();
       expect(doc.text('solidHex'), 'r%10+#12ab34');
       doc.data['backgroundStyle'] = 'ink';

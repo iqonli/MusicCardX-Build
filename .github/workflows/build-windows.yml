@@ -37,6 +37,14 @@ jobs:
         run: flutter pub get
       - name: Static analysis
         run: flutter analyze 2>&1 | Tee-Object analyze.txt
+      - name: Build native background DLL for FFI tests
+        run: |
+          cmake -S third_party/mcx_background -B build/native-tests -A x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/native-tests --config Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dll = (Resolve-Path build/native-tests/Release/mcx_background.dll).Path
+          "MCX_BACKGROUND_LIBRARY=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Existing shared and Android UI regressions
         run: flutter test --dart-define=MCX_MOBILE_TEST=true --reporter expanded 2>&1 | Tee-Object tests.txt
       - name: Windows adapter tests

@@ -25,7 +25,7 @@ void main() {
       final d = CardDocument.fresh();
       d.fields.addAll({'title': 'Song', 'artist': 'Singer', 'album': 'Album'});
       d.data['seed'] = '12345678';
-      d.data['backgroundStyle'] = 'fusion';
+      d.data['backgroundStyle'] = 'fusionClassic';
       expect(
         exportFilename(d, 'png'),
         'MusicCardX-Song-Singer-Album-12345678.png',
