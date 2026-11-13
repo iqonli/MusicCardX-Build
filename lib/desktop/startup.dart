@@ -23,7 +23,10 @@ class _DesktopStartupState extends State<DesktopStartup> {
             if(state.hasError) ...[
               const Text('启动失败'), const SizedBox(height:12),
               SelectableText('${state.error}'), const SizedBox(height:12),
-              TextButton(onPressed:()=>setState(()=>loading=widget.load()),child:const Text('重试')),
+              TextButton(onPressed:() {
+                final next = widget.load();
+                setState(() { loading = next; });
+              },child:const Text('重试')),
             ] else ...[const LinearProgressIndicator(), const SizedBox(height:12),const Text('正在加载配置…')],
           ],
         )),
