@@ -1,3 +1,4 @@
+import 'desktop/platform_io.dart';
 import 'dialog_buttons.dart';
 
 import 'dart:io';
@@ -13,6 +14,7 @@ Future<List<String>?> browseFiles(
   bool multiple = true,
   String? initial,
 }) async {
+  if (PlatformIO.windows) return PlatformIO.desktop.invokeListMethod<String>('pickFiles', {'extensions': extensions.toList(), 'directory': directory, 'multiple': multiple, 'initial': initial});
   if (Platform.isAndroid &&
       await _io.invokeMethod<bool>('requestStorage') != true) {
     return null;

@@ -1,3 +1,5 @@
+// ignore_for_file: curly_braces_in_flow_control
+import 'desktop/platform_io.dart';
 import 'dialog_buttons.dart';
 import 'fonts.dart';
 import 'color_picker.dart';
@@ -48,6 +50,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   PaintingBinding.instance.imageCache.maximumSizeBytes = 32 * 1024 * 1024;
   PaintingBinding.instance.imageCache.maximumSize = 30;
+  await PlatformIO.initialize();
   await CardDocument.initialize();
   final chinese = ChineseConverter();
   await chinese.load();
@@ -150,7 +153,7 @@ class MusicCardX extends StatelessWidget {
               isDense: true,
             ),
             cardTheme: const CardThemeData(elevation: 0),
-            fontFamily: 'Roboto',
+            fontFamily: PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto',
           ),
           home: Editor(document, chinese),
         );
@@ -184,6 +187,9 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     platform.setMethodCallHandler((call) async {
+      if (call.method == 'closing') { commitInput(); await _save(); await maintainStorage(); }
+      if (call.method == 'dropFiles') await desktopFiles((call.arguments as List).cast<String>());
+      if (call.method == 'previewAction') await export(call.arguments as String);
       if (call.method == 'incoming') await incoming();
       if (call.method == 'exportProgress' &&
           _working &&
@@ -202,7 +208,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       (_) => maintainStorage(),
     );
     maintainStorage();
-    WidgetsBinding.instance.addPostFrameCallback((_) => incoming());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      incoming();
+      if(PlatformIO.startupNotice!=null) message(PlatformIO.startupNotice!);
+    });
   }
 
   final _fontsReady = Completer<void>();
@@ -287,7 +296,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
 
   Future<void> applyConfigurationPreferences(Map<String, dynamic> raw) async {
     pinned = doc.data['previewPinned'] != false;
-    if (raw['fontPreferences'] is Map) {
+    if (!PlatformIO.windows && raw['fontPreferences'] is Map) {
       final repo = FontRepository.instance;
       await repo.init();
       final preferences = mapv(doc.data['fontPreferences']);
@@ -441,6 +450,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
           renderedRevision = token;
           error = null;
         });
+        if(PlatformIO.windows) await desktopPreview(show:false);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           old?.image.dispose();
         });
@@ -476,7 +486,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   Future<void> pickCover() async => busy(() async {
     final path = await platform.invokeMethod<String>('pickCover');
     if (path != null) {
-      doc.data['coverPath'] = path;
+      doc.data['coverPath'] = PlatformIO.windows ? await ownCover(path) : path;
       revision++;
       await _loadCover();
       await _save();
@@ -518,6 +528,13 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
             ? '准备分享'
             : '复制图片',
       );
+      if (PlatformIO.windows && action == 'saveAsImage') {
+        final paths=await PlatformIO.desktop.invokeListMethod<String>('saveFile',{'name':filename,'extensions':[encoded.extension]});
+        if(paths==null || paths.isEmpty) return;
+        var path=paths.first;
+        if(!path.toLowerCase().endsWith('.${encoded.extension}')) path+='.${encoded.extension}';
+        await File(path).writeAsBytes(bytes,flush:true); message('已保存 $path'); return;
+      }
       if (action == 'saveImage') {
         if (Platform.isAndroid &&
             await platform.invokeMethod<bool>('requestStorage') != true) {
@@ -936,7 +953,9 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
               ),
             ),
           ),
-          if (enabled)
+          if (enabled && PlatformIO.windows)
+            Column(crossAxisAlignment:CrossAxisAlignment.start,children:[for(final row in rows) Wrap(spacing:4,runSpacing:4,children:row)]),
+          if (enabled && !PlatformIO.windows)
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Column(
@@ -1180,6 +1199,12 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     message('配置已导入');
   });
   Future<void> saveConfig() async => busy(() async {
+    if(PlatformIO.windows) {
+      final paths=await PlatformIO.desktop.invokeListMethod<String>('saveFile',{'name':'MusicCardX.json','extensions':['json']});
+      if(paths==null || paths.isEmpty)return;
+      final path=paths.first.toLowerCase().endsWith('.json')?paths.first:'${paths.first}.json';
+      await File(path).writeAsString(const JsonEncoder.withIndent('  ').convert(configurationSnapshot()),flush:true); message('已保存 $path'); return;
+    }
     await FontRepository.instance.init();
     if (!mounted) return;
     final picked = await browseFiles(context, directory: true);
@@ -1585,14 +1610,14 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       visualDensity: VisualDensity.standard,
       materialTapTargetSize: MaterialTapTargetSize.padded,
       textTheme: Theme.of(context).textTheme
-          .apply(fontFamily: uiFamily ?? 'Roboto'),
+          .apply(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
       listTileTheme: Theme.of(context).listTileTheme.copyWith(
         minTileHeight: 48,
         dense: false,
         titleTextStyle: Theme.of(context).listTileTheme.titleTextStyle
-            ?.copyWith(fontFamily: uiFamily ?? 'Roboto'),
+            ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
         subtitleTextStyle: Theme.of(context).listTileTheme.subtitleTextStyle
-            ?.copyWith(fontFamily: uiFamily ?? 'Roboto'),
+            ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
@@ -1604,7 +1629,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(16),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          textStyle: TextStyle(fontSize: 13, fontFamily: uiFamily ?? 'Roboto'),
+          textStyle: TextStyle(fontSize: 13, fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
           visualDensity: VisualDensity.standard,
           tapTargetSize: MaterialTapTargetSize.padded,
         ),
@@ -2340,6 +2365,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
 
   Widget settingsPage() => Column(
     children: [
+      if(PlatformIO.windows) normalSection('存储位置',[
+        ListTile(title:const Text('配置目录'),subtitle:Text(desktopRoot)),
+        Wrap(children:[TextButton(onPressed:()=>switchStorage(false),child:const Text('程序目录Config')),TextButton(onPressed:()=>switchStorage(true),child:const Text('LocalAppData'))]),
+      ]),
       normalSection('显示', [
         setting(
           '文本对齐模式',
@@ -2360,11 +2389,11 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
             'bottom': Icons.vertical_align_bottom,
           }[doc.text('textAlignMode')],
         ),
-        toggle('启用monet配色', doc.data, 'monet'),
+        if (!PlatformIO.windows) toggle('启用monet配色', doc.data, 'monet'),
       ]),
       normalSection('字体', [
         ListTile(
-          title: const Text('字体管理器'),
+          title: Text(PlatformIO.windows ? '系统字体' : '字体管理器'),
           onTap: manageFonts,
           trailing: const Icon(Icons.chevron_right),
         ),
@@ -2563,7 +2592,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
                           textStyle: WidgetStatePropertyAll(
                             TextStyle(
                               fontSize: 13,
-                              fontFamily: uiFamily ?? 'Roboto',
+                              fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
                             ),
                           ),
                         ),
@@ -2675,7 +2704,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         for (final row in styleLabels.keys)
           [styleLabels[row]!, for (final k in keys.keys) cell(row, k)],
       ],
-      family: uiFamily ?? 'Roboto',
+      family: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
       onHeader: (key) {
         if (key != 'element') columnEdit(key);
       },
@@ -2688,6 +2717,129 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         }
       },
     );
+  }
+
+  String desktopRoot = '';
+  bool desktopPreviewOpened = false;
+  Future<String> ownCover(String path) async {
+    final root=await platform.invokeMethod<String>('storageRoot');
+    final file=File('$root/covers/current-${DateTime.now().microsecondsSinceEpoch}.image');
+    await file.parent.create(recursive:true); await File(path).copy(file.path); return file.path;
+  }
+  Future<void> switchStorage(bool appData) async => busy(() async {
+    await _save(); final old=await platform.invokeMethod<String>('storageRoot');
+    desktopRoot=await PlatformIO.migrate(appData);
+    if(doc.text('coverPath').startsWith('$old/')) doc.data['coverPath']=doc.text('coverPath').replaceFirst('$old/', '$desktopRoot/');
+    await _save(); setState((){}); message('已切换到$desktopRoot');
+  });
+  Future<void> desktopPreview({bool show=true}) async {
+    final current=rendered; if(current==null)return;
+    final recorder=ui.PictureRecorder(); final canvas=Canvas(recorder);
+    final scale=1600/current.image.width;
+    final factor=scale<1?scale:1.0;
+    canvas.scale(factor);
+    canvas.drawImage(current.image,Offset.zero,Paint()..filterQuality=FilterQuality.high);
+    final picture=recorder.endRecording();
+    final image=await picture.toImage((current.image.width*factor).round(),(current.image.height*factor).round()); picture.dispose();
+    try { final bytes=await image.toByteData(format:ui.ImageByteFormat.png); if(bytes==null)return;
+      await PlatformIO.desktop.invokeMethod('preview',{'bytes':bytes.buffer.asUint8List(),'show':show || !desktopPreviewOpened,'title':'MusicCardX  ${current.image.width}×${current.image.height}  ${current.milliseconds}ms  ${doc.n('exportScale',1)}x  seed ${current.seed}'});
+      desktopPreviewOpened=true;
+    } finally { image.dispose(); }
+  }
+  Future<void> desktopFiles(List<String> paths) async {
+    for(final path in paths) {
+      try {
+        final ext=path.split('.').last.toLowerCase();
+        if(['png','jpg','jpeg','bmp','webp','gif'].contains(ext)) {
+          await applyIncoming({'kind':'image','path':path});
+        } else if(audioExtensions.contains(ext)) {
+          await applyIncoming({'kind':'audio','path':path});
+        } else if(ext=='json') {
+          final text=await File(path).readAsString(); final raw=mapv(jsonDecode(text));
+          if(raw.containsKey('styles') || raw.containsKey('backgroundStyle')) {
+            if(await confirm('导入配置：$path？')) { doc=CardDocument.fromJson(raw); await applyConfigurationPreferences(raw); await _loadCover(); changed(); }
+          } else { await applyIncoming({'jsonFile':true,'text':text}); }
+        } else { message('不支持的文件：$path'); continue; }
+        message('已处理 $path');
+      } catch(e) { message('导入失败 $path：$e'); }
+    }
+  }
+  Future<void> desktopPaste() async {
+    final focus=FocusManager.instance.primaryFocus?.context;
+    if(focus?.widget is EditableText || focus?.findAncestorWidgetOfExactType<EditableText>()!=null)return;
+    try {
+      final value=await PlatformIO.desktop.invokeMapMethod<String,dynamic>('readClipboard'); if(value==null)return;
+      if(value['files'] is List) { await desktopFiles((value['files'] as List).cast<String>()); }
+      else if(value['bytes'] is Uint8List) {
+        final root=await platform.invokeMethod<String>('storageRoot'); final f=File('$root/cache/clipboard.image'); await f.parent.create(recursive:true); await f.writeAsBytes(value['bytes'] as Uint8List); await applyIncoming({'kind':'image','path':f.path});
+      } else if(value['text'] is String) { await applyIncoming({'text':value['text']}); }
+    } catch(e) { message('粘贴失败：$e'); }
+  }
+  String desktopElement = styleLabels.keys.first;
+  Widget desktopWorkbench() {
+    final tools=Wrap(spacing:8,runSpacing:6,children:[
+      TextButton(onPressed:importConfig,child:const Text('导入配置')),
+      TextButton(onPressed:saveConfig,child:const Text('导出配置')),
+      TextButton(onPressed:library,child:const Text('选择配置')),
+      TextButton(onPressed:() async {
+        desktopRoot=await platform.invokeMethod<String>('storageRoot')??'';
+        if(!mounted)return;
+        await Navigator.push<void>(context,MaterialPageRoute(builder:(_)=>Scaffold(
+          appBar:AppBar(title:const Text('设置')),
+          body:SingleChildScrollView(child:settingsPage()),
+        )));
+      },child:const Text('设置')),
+      TextButton(onPressed:()=>desktopPreview(),child:const Text('预览窗口')),
+      TextButton(onPressed:()=>export('saveImage'),child:const Text('快速保存')),
+      TextButton(onPressed:()=>export('saveAsImage'),child:const Text('保存')),
+      TextButton(onPressed:()=>export('copyImage'),child:const Text('复制')),
+    ]);
+    final seeds=Wrap(spacing:8,runSpacing:6,children:[
+      TextButton(onPressed:()async{
+        final v=await editText('Input',doc.text('seed'));
+        if(v!=null){doc.data['seed']=v;changed();}
+      },child:Text('种子 ${doc.text('seed')}')),
+      TextButton(onPressed:(){doc.data['seed']=newSeed();changed();},child:const Text('刷新种子')),
+      if(seededBackgrounds.contains(doc.text('backgroundStyle')))
+        TextButton(onPressed:seedFair,child:const Text('博览会')),
+    ]);
+    final attributes=ExpansionTile(title:const Text('项目属性'),children:[
+      Wrap(spacing:4,runSpacing:4,children:[
+        for(final e in styleLabels.entries)
+          ChoiceChip(label:Text(e.value),selected:desktopElement==e.key,
+            onSelected:(_)=>setState(()=>desktopElement=e.key)),
+      ]),
+      Wrap(spacing:4,runSpacing:4,children:styleControls(doc.styles[desktopElement])),
+    ]);
+    final content=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+      tools,
+      ExpansionTile(title:const Text('歌曲信息与封面'),initiallyExpanded:true,children:[inputPage()]),
+      backgroundPanel(),colorPanel(),seeds,
+      ExpansionTile(title:const Text('文字样式表格'),initiallyExpanded:true,children:[
+        SingleChildScrollView(scrollDirection:Axis.horizontal,child:textTable()),
+      ]),
+      attributes,lyricsPanel(),
+      if(doc.lyrics['enabled']==true)dividerPanel(),
+      if(error!=null)Text(error!,style:const TextStyle(color:Colors.red)),
+      Text(rendered==null?'正在渲染':'${rendered!.image.width}×${rendered!.image.height}  ${doc.n('exportScale',1)}x  ${rendered!.milliseconds}ms  ${_rendering?'正在更新':'就绪'}'),
+    ]);
+    final progress=Center(child:Card(child:Padding(
+      padding:const EdgeInsets.all(24),
+      child:SizedBox(width:280,child:Column(mainAxisSize:MainAxisSize.min,children:[
+        Text(_workLabel),const SizedBox(height:12),LinearProgressIndicator(value:_workProgress),
+      ])),
+    )));
+    return CallbackShortcuts(bindings:{
+      const SingleActivator(LogicalKeyboardKey.keyV,control:true):()=>unawaited(desktopPaste()),
+      const SingleActivator(LogicalKeyboardKey.keyS,control:true):()=>unawaited(export('saveImage')),
+      const SingleActivator(LogicalKeyboardKey.keyS,control:true,shift:true):()=>unawaited(export('saveAsImage')),
+    },child:Focus(autofocus:true,child:Scaffold(
+      appBar:AppBar(title:const Text('MusicCardX')),
+      body:Stack(children:[
+        Scrollbar(child:SingleChildScrollView(child:Padding(padding:const EdgeInsets.all(12),child:content))),
+        if(_working)Positioned.fill(child:ColoredBox(color:Colors.black38,child:progress)),
+      ]),
+    )));
   }
 
   List<Widget> pageChildren(Widget page) =>
@@ -2704,21 +2856,22 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   );
   @override
   Widget build(BuildContext context) {
+    if(PlatformIO.windows) return desktopWorkbench();
     return Theme(
       data: Theme.of(context).copyWith(
         listTileTheme: Theme.of(context).listTileTheme.copyWith(
           titleTextStyle: Theme.of(context).listTileTheme.titleTextStyle
-              ?.copyWith(fontFamily: uiFamily ?? 'Roboto'),
+              ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
           subtitleTextStyle: Theme.of(context).listTileTheme.subtitleTextStyle
-              ?.copyWith(fontFamily: uiFamily ?? 'Roboto'),
+              ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
         ),
         textTheme: Theme.of(context).textTheme
-            .apply(fontFamily: uiFamily ?? 'Roboto'),
+            .apply(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
         textButtonTheme: TextButtonThemeData(
           style: TextButton.styleFrom(
             textStyle: TextStyle(
               fontSize: 13,
-              fontFamily: uiFamily ?? 'Roboto',
+              fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
             ),
             minimumSize: const Size(34, 32),
             backgroundColor: controlColor(context),
@@ -2835,7 +2988,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
                               : Colors.black54,
                           textStyle: TextStyle(
                             fontSize: 13,
-                            fontFamily: uiFamily ?? 'Roboto',
+                            fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
                             fontWeight: tab == e.key
                                 ? FontWeight.w700
                                 : FontWeight.w400,

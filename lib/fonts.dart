@@ -1,3 +1,6 @@
+// ignore_for_file: curly_braces_in_flow_control
+import 'desktop/platform_io.dart';
+import 'package:flutter/foundation.dart';
 import 'dialog_buttons.dart';
 import 'storage_policy.dart';
 
@@ -315,6 +318,7 @@ class FontRepository extends ChangeNotifier {
   List<Map<String, dynamic>> get rows => mode == 'ezcd' ? shared : local;
   Future<void>? _initializing;
   Future<void> init() {
+    if (PlatformIO.windows && _initialized) return Future.value();
     if (_initializing != null) return _initializing!;
     if (root != null) return Future.value();
     return _initializing = _initialize().whenComplete(
@@ -323,6 +327,14 @@ class FontRepository extends ChangeNotifier {
   }
 
   Future<void> _initialize() async {
+    if (PlatformIO.windows) {
+      final files = await PlatformIO.desktop.invokeListMethod<String>('systemFontFiles') ?? [];
+      local = await compute(inspectSystemFonts, files);
+      final base=await (const PlatformIO()).invokeMethod<String>('storageRoot');
+      final preferences=File('$base/system-font-preview.json');
+      if(await preferences.exists()) { try { final v=jsonDecode(await preferences.readAsString()); sample='${v['sample']??sample}'; previewSize=(v['size'] as num? ?? previewSize).toDouble(); } catch (_) {} }
+      mode = 'local'; _initialized = true; notifyListeners(); return;
+    }
     final p = await fontIO.invokeMethod<String>('storageRoot');
     if (p == null) {
       if (Platform.isAndroid) throw const FileSystemException('无法读取字体目录');
@@ -452,7 +464,12 @@ class FontRepository extends ChangeNotifier {
   }
 
   Future<void> _saving = Future.value();
+  Future<void> saveSystemPreferences() async {
+    final base=await (const PlatformIO()).invokeMethod<String>('storageRoot');
+    await PlatformIO.atomic(File('$base/system-font-preview.json'),jsonEncode({'sample':sample,'size':previewSize}));
+  }
   Future<void> save() {
+    if (PlatformIO.windows) return saveSystemPreferences();
     final base = root!.path;
     final json = jsonEncode({
       'metadataVersion': 2,
@@ -509,6 +526,7 @@ class FontRepository extends ChangeNotifier {
   }
 
   Future<void> refresh() async {
+    if (PlatformIO.windows) { _initialized=false; await _initialize(); return; }
     if (mode != 'ezcd' || tree.isEmpty) return;
     try {
       final bytes = await readTree('ezcd-fonts.json');
@@ -878,6 +896,17 @@ class _FontLibraryState extends State<FontLibraryPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (PlatformIO.windows) return Scaffold(
+      appBar: AppBar(title: const Text('系统字体'), actions: [IconButton(onPressed: () => run(repo.refresh), icon: const Icon(Icons.refresh))]),
+      body: Column(children: [Padding(padding: const EdgeInsets.all(12), child: TextField(decoration: const InputDecoration(labelText:'筛选字体'), onChanged:(s)=>setState(()=>query=s.toLowerCase()))), Expanded(child: ListView(children:[
+        if(widget.selecting) ListTile(title:const Text('系统默认'),onTap:()=>Navigator.pop(context,'')),
+        for(final row in repo.rows.where((r)=>'${r['family']} ${r['fullName']}'.toLowerCase().contains(query))) ListTile(
+          title:Text('${row['fullName']}'), subtitle:Text('${row['weight']}'),
+          onTap:() async { if(widget.selecting) { Navigator.pop(context,'${row['id']}'); } else { await Navigator.push<void>(context,MaterialPageRoute(builder:(_)=>FontPreviewPage(row:row))); } },
+          trailing:IconButton(tooltip:'预览',icon:const Icon(Icons.preview_outlined),onPressed:()=>Navigator.push<void>(context,MaterialPageRoute(builder:(_)=>FontPreviewPage(row:row)))),
+        ),
+      ]))]),
+    );
     final groups = <String, List<Map<String, dynamic>>>{};
     for (final r in repo.rows) {
       if ('${r['family']} ${r['subfamily']} ${r['fullName']} ${r['fileName']}'
@@ -1139,4 +1168,16 @@ class _FontLibraryState extends State<FontLibraryPage> {
       ),
     );
   }
+}
+
+/// Inspect system font files off the UI isolate. Nothing is copied to Config.
+List<Map<String,dynamic>> inspectSystemFonts(List<String> files) {
+  final rows=<Map<String,dynamic>>[];
+  for(final path in files) { try {
+    final bytes=File(path).readAsBytesSync();
+    for(final face in Sfnt.inspect(bytes,File(path).uri.pathSegments.last)) {
+      rows.add({...face,'id':'${face['fullName']}','localPath':path,'sha256':path,'fileName':File(path).uri.pathSegments.last});
+    }
+  } catch (_) { /* Unsupported system font formats are skipped. */ } }
+  return rows;
 }

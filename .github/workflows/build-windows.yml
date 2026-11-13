@@ -1,0 +1,67 @@
+name: Windows x64 desktop
+on:
+  workflow_dispatch:
+  push:
+    branches: [windows-desktop]
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Check SDK versions and MSVC
+        run: |
+          flutter --version
+          $v = flutter --version --machine | ConvertFrom-Json
+          if ($v.frameworkVersion -ne '3.47.9' -or $v.dartSdkVersion -notmatch '^3\.13\.7') { throw 'Unexpected Flutter/Dart version' }
+          where.exe cl
+          flutter config --enable-windows-desktop
+          flutter doctor -v
+      - name: Resolve dependencies
+        run: flutter pub get
+      - name: Static analysis
+        run: flutter analyze 2>&1 | Tee-Object analyze.txt
+      - name: Existing shared and Android UI regressions
+        run: flutter test --dart-define=MCX_MOBILE_TEST=true --reporter expanded 2>&1 | Tee-Object tests.txt
+      - name: Windows adapter tests
+        run: flutter test test/desktop_test.dart --reporter expanded 2>&1 | Tee-Object desktop-tests.txt
+      - name: Build Windows Release with MSVC
+        run: flutter build windows --release 2>&1 | Tee-Object build-windows.txt
+      - name: Load native DLL and check deterministic render
+        run: python tool/windows/native_smoke.py
+      - name: Package runnable portable directory and source
+        run: ./tool/windows/package.ps1
+      - name: Upload portable ZIP, source and hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicCardX-Windows-x64-${{ github.run_number }}
+          path: dist/*
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-validation-${{ github.run_number }}
+          path: |
+            analyze.txt
+            tests.txt
+            desktop-tests.txt
+            build-windows.txt
+          retention-days: 14

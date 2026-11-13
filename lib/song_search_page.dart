@@ -1,3 +1,4 @@
+import 'desktop/platform_io.dart';
 import 'dart:async';
 
 import 'package:flutter/services.dart';
@@ -519,7 +520,7 @@ class _SongSearchPageState extends State<SongSearchPage>
                   ),
                 ],
               ),
-              if (generated)
+              if (generated && !PlatformIO.windows)
                 IntentActionsBar(
                   actions: (widget.document.data['intentActions'] as List)
                       .map((e) => Map<String, dynamic>.from(e as Map))

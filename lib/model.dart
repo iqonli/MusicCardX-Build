@@ -1,3 +1,4 @@
+import 'desktop/platform_io.dart';
 import 'metadata_prompt.dart';
 import 'fonts.dart';
 import 'hex_text.dart';
@@ -46,7 +47,7 @@ const ccModes = {
   's2twp': 's2twp',
   's2hk': 's2hk',
 };
-const platform = MethodChannel('com.iqonli.musiccardx/platform');
+const platform = PlatformIO();
 double numv(dynamic v, [double fallback = 0]) =>
     v is num ? v.toDouble() : double.tryParse('$v') ?? fallback;
 Map<String, dynamic> mapv(dynamic v) =>
