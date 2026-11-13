@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <climits>
 #include <cstring>
+#include <fstream>
 using Microsoft::WRL::ComPtr;
 using V=flutter::EncodableValue;using M=flutter::EncodableMap;using L=flutter::EncodableList;
 static HWND owner=nullptr,preview=nullptr;
@@ -77,6 +78,11 @@ void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  channel->SetMethodCallHandler([](const flutter::MethodCall<V>&call,std::unique_ptr<flutter::MethodResult<V>>result){try{
  M empty;const M&a=call.arguments()&&std::holds_alternative<M>(*call.arguments())?std::get<M>(*call.arguments()):empty;const auto&m=call.method_name();
  if(m=="locations"){wchar_t exe[32768];GetModuleFileName(nullptr,exe,32768);PWSTR path=nullptr;check(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&path));M v{{V("exe"),V(utf(std::filesystem::path(exe).parent_path().wstring()))},{V("appData"),V(utf(path))}};CoTaskMemFree(path);result->Success(V(v));}
+ else if(m=="editorReady"){
+ wchar_t report[32768];DWORD n=GetEnvironmentVariable(L"MCX_SMOKE_REPORT",report,32768);
+ if(n>0&&n<32768){std::ofstream f{std::filesystem::path(report)};f<<"editor-ready";}
+ result->Success();
+ }
  else if(m=="replaceFile"){if(!MoveFileEx(wide(str(a,"from")).c_str(),wide(str(a,"to")).c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("Cannot replace config file");result->Success();}
  else if(m=="pickFiles"||m=="saveFile")result->Success(V(pick(a,m=="saveFile")));
  else if(m=="pickCover"){M args{{V("extensions"),V(L{V("png"),V("jpg"),V("jpeg"),V("webp"),V("bmp"),V("gif")})}};auto p=pick(args);if(p.empty())result->Success();else result->Success(p.front());}
@@ -103,7 +109,7 @@ void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  CloseClipboard();}catch(...){CloseClipboard();throw;}result->Success(V(value));}
  else if(m=="preview"){
  auto bytes=std::get<std::vector<uint8_t>>(get(a,"bytes"));previewPixels=decode(bytes,pw,ph);
- if(!preview){WNDCLASS wc{};wc.hInstance=GetModuleHandle(nullptr);wc.lpszClassName=L"MusicCardXPreview";wc.lpfnWndProc=previewProc;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);RegisterClass(&wc);preview=CreateWindow(wc.lpszClassName,L"预览",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,900,600,nullptr,nullptr,wc.hInstance,nullptr);const wchar_t*labels[]={L"快速保存",L"保存",L"复制"};for(int i=0;i<3;i++)CreateWindow(L"BUTTON",labels[i],WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,8+i*98,8,92,30,preview,(HMENU)(INT_PTR)(i+1),wc.hInstance,nullptr);}
+ if(!preview){WNDCLASS wc{};wc.hInstance=GetModuleHandle(nullptr);wc.lpszClassName=L"MusicCardXPreview";wc.lpfnWndProc=previewProc;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hIcon=LoadIcon(GetModuleHandle(nullptr),MAKEINTRESOURCE(101));RegisterClass(&wc);preview=CreateWindow(wc.lpszClassName,L"预览",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,900,600,nullptr,nullptr,wc.hInstance,nullptr);const wchar_t*labels[]={L"快速保存",L"保存",L"复制"};for(int i=0;i<3;i++)CreateWindow(L"BUTTON",labels[i],WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,8+i*98,8,92,30,preview,(HMENU)(INT_PTR)(i+1),wc.hInstance,nullptr);}
  SetWindowText(preview,wide(str(a,"title")).c_str());InvalidateRect(preview,nullptr,TRUE);if(get(a,"show")==V(true))ShowWindow(preview,SW_SHOWNORMAL);result->Success();}
  else result->NotImplemented();
  }catch(const std::exception&e){result->Error("windows",e.what());}});

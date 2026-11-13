@@ -1,5 +1,6 @@
 // ignore_for_file: curly_braces_in_flow_control
 import 'desktop/platform_io.dart';
+import 'desktop/startup.dart';
 import 'dialog_buttons.dart';
 import 'fonts.dart';
 import 'color_picker.dart';
@@ -50,6 +51,14 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   PaintingBinding.instance.imageCache.maximumSizeBytes = 32 * 1024 * 1024;
   PaintingBinding.instance.imageCache.maximumSize = 30;
+  if (PlatformIO.windows) {
+    runApp(DesktopStartup(load: loadApplication));
+  } else {
+    runApp(await loadApplication());
+  }
+}
+
+Future<MusicCardX> loadApplication() async {
   await PlatformIO.initialize();
   await CardDocument.initialize();
   final chinese = ChineseConverter();
@@ -77,7 +86,7 @@ void main() async {
     }
   });
   useMonet = doc.data['monet'] == true;
-  runApp(MusicCardX(doc, chinese));
+  return MusicCardX(doc, chinese);
 }
 
 class MusicCardX extends StatelessWidget {
@@ -2721,6 +2730,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
 
   String desktopRoot = '';
   bool desktopPreviewOpened = false;
+  bool desktopReadySent = false;
   Future<String> ownCover(String path) async {
     final root=await platform.invokeMethod<String>('storageRoot');
     final file=File('$root/covers/current-${DateTime.now().microsecondsSinceEpoch}.image');
@@ -2744,6 +2754,12 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     try { final bytes=await image.toByteData(format:ui.ImageByteFormat.png); if(bytes==null)return;
       await PlatformIO.desktop.invokeMethod('preview',{'bytes':bytes.buffer.asUint8List(),'show':show || !desktopPreviewOpened,'title':'MusicCardX  ${current.image.width}×${current.image.height}  ${current.milliseconds}ms  ${doc.n('exportScale',1)}x  seed ${current.seed}'});
       desktopPreviewOpened=true;
+      if(!desktopReadySent) {
+        desktopReadySent=true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          unawaited(PlatformIO.desktop.invokeMethod<void>('editorReady'));
+        });
+      }
     } finally { image.dispose(); }
   }
   Future<void> desktopFiles(List<String> paths) async {
