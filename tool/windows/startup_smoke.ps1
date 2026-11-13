@@ -16,7 +16,12 @@ $temp=Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString())
 New-Item $temp -ItemType Directory | Out-Null
 $process=$null
 try {
- Expand-Archive dist/MusicCardX-Windows-x64.zip $temp
+ Expand-Archive dist/MusicCardX-Windows-app-x64.zip $temp
+ if(Test-Path "$temp/flutter_windows.dll") { throw 'APP package unexpectedly contains Flutter DLL' }
+ Expand-Archive dist/MusicCardX-Flutter-runtime-x64.zip $temp
+ $requirement=Get-Content "$temp/required-flutter-runtime.json" -Raw | ConvertFrom-Json
+ $hash=(Get-FileHash "$temp/flutter_windows.dll" -Algorithm SHA256).Hash.ToLower()
+ if($hash -ne $requirement.sha256) { throw 'Flutter runtime does not match APP package' }
  $env:MCX_SMOKE_REPORT=Join-Path $temp 'ready.txt'
  $process=Start-Process "$temp/MusicCardX.exe" -WorkingDirectory $env:RUNNER_TEMP -PassThru
  $deadline=(Get-Date).AddSeconds(60)

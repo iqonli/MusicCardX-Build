@@ -57,11 +57,34 @@ jobs:
         run: ./tool/windows/package.ps1
       - name: Launch packaged editor and verify close
         run: ./tool/windows/startup_smoke.ps1
-      - name: Upload portable ZIP, source and hashes
+      - name: Upload APP without Flutter DLL
         uses: actions/upload-artifact@v4
         with:
-          name: MusicCardX-Windows-x64-${{ github.run_number }}
-          path: dist/*
+          name: MusicCardX-Windows-APP-${{ github.run_number }}
+          path: |
+            dist/MusicCardX-Windows-app-x64.zip
+            dist/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload Flutter runtime DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicCardX-Windows-Flutter-DLL-${{ github.run_number }}
+          path: |
+            dist/MusicCardX-Flutter-runtime-x64.zip
+            dist/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload Source
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicCardX-Windows-Source-${{ github.run_number }}
+          path: |
+            dist/MusicCardX-Windows-source.zip
+            dist/SHA256SUMS.txt
+          compression-level: 0
           retention-days: 14
           if-no-files-found: error
       - name: Upload validation logs

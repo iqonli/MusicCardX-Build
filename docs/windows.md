@@ -6,7 +6,7 @@
 
 Actions工作流：`.github/workflows/build-windows.yml`。Windows 2022 Runner、MSVC、Windows SDK、Flutter3.47.9、Dart3.13.7。流程依次执行依赖解析、静态分析、原有测试、Windows适配测试、Release构建、完整运行目录打包和SHA256清单生成。不会创建GitHub Release。
 
-下载Actions中MusicCardX-Windows-x64产物，解压内层ZIP，运行MusicCardX.exe。请保留同目录DLL和data目录。绿色包附带MSVC运行库、mcx_background.dll和许可证。
+下载Actions中的APP和Flutter-DLL两个产物，将内层ZIP解压到同一目录，运行MusicCardX.exe。请保留同目录DLL和data目录。绿色包附带MSVC运行库、mcx_background.dll和许可证。
 
 源码包由同次提交的git archive生成。files.sha256.json记录相对路径、字节数和SHA256，供未来安装器读取；目前没有安装器或更新器。
 
@@ -57,3 +57,15 @@ lib/desktop/music_input.dart提供经过标准化的内部数据输入对象，�
 ## 启动宿主修复
 
 显式显示Flutter子窗口、请求首帧重绘。初始化时先显示加载界面，异常会显示错误和重试入口。关窗等待保存回执，5秒无回执时退出，避免启动失败后无法关闭。EXE、主窗口和预览窗口使用现有APP图标。Actions从绿色ZIP解压启动，等待编辑器完成首张渲染，再发送原生关窗消息并验证进程退出；该检查不代替完整手动交互测试。
+
+## 三份分装产物
+
+Actions分别上传MusicCardX-Windows-APP、MusicCardX-Windows-Flutter-DLL、MusicCardX-Windows-Source，另有验证日志产物。
+
+- APP：MusicCardX-Windows-app-x64.zip，包含EXE、data、背景库和MSVC运行库，排除flutter_windows.dll。
+- Flutter DLL：MusicCardX-Flutter-runtime-x64.zip，包含flutter_windows.dll、版本/哈希信息及Flutter许可证。
+- 源码：MusicCardX-Windows-source.zip。
+
+首次使用时，将APP包和Flutter DLL包解压到同一目录，确保flutter_windows.dll与MusicCardX.exe同级。后续更新可只下载APP包；先比较APP包中的required-flutter-runtime.json与现有DLL的SHA256，匹配就能复用，不匹配时下载对应DLL包。不要仅凭Flutter版本号判断兼容性。
+
+每个产物附带本次三个ZIP的SHA256SUMS.txt。Actions会将拆出的两包重新合并、检查DLL哈希，再实际启动和关闭程序。
