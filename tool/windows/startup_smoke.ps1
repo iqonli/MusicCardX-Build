@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 public static class McxWindow {
  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int cx,int cy,uint flags);
- [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string cls,string title);
+ [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr parent,uint command);
  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect rect);
  public delegate bool EnumProc(IntPtr h,IntPtr l);
@@ -48,8 +48,11 @@ try {
  if($script:handle -eq [IntPtr]::Zero -or ![McxWindow]::IsWindowVisible($script:handle)) { throw 'Main window not visible' }
  # Exercise window resizing and rapid wheel traffic on the packaged release.
  # WM_NULL measures native message responsiveness, not Flutter frame rate.
- $child=[McxWindow]::FindWindowEx($script:handle,[IntPtr]::Zero,'FLUTTERVIEW',$null)
+ $child=[McxWindow]::GetWindow($script:handle,5)
  if($child -eq [IntPtr]::Zero) { throw 'Flutter child window missing' }
+ $childClass=New-Object Text.StringBuilder 128
+ [void][McxWindow]::GetClassName($child,$childClass,128)
+ Write-Output "Native Flutter child class: $childClass"
  $times=@()
  for($i=0;$i -lt 40;$i++) {
   if($i % 10 -eq 0) { [void][McxWindow]::SetWindowPos($script:handle,[IntPtr]::Zero,0,0,(1000+($i%20)*10),800,6) }
