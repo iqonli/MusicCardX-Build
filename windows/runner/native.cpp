@@ -23,6 +23,8 @@ using Microsoft::WRL::ComPtr;
 using V=flutter::EncodableValue;using M=flutter::EncodableMap;using L=flutter::EncodableList;
 static HWND owner=nullptr,preview=nullptr;
 static std::unique_ptr<flutter::MethodChannel<V>> channel;
+struct PaintCache { std::shared_ptr<void> bitmap; int width=0,height=0; };
+static PaintCache previewCache;
 static std::vector<uint8_t> previewPixels;static UINT pw=0,ph=0;
 static std::wstring wide(const std::string&s){int n=MultiByteToWideChar(CP_UTF8,0,s.data(),(int)s.size(),nullptr,0);std::wstring v(n,0);MultiByteToWideChar(CP_UTF8,0,s.data(),(int)s.size(),v.data(),n);return v;}
 static std::string utf(const std::wstring&s){int n=WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),nullptr,0,nullptr,nullptr);std::string v(n,0);WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),v.data(),n,nullptr,nullptr);return v;}
@@ -73,22 +75,36 @@ static std::vector<uint8_t> rgbaPixels(const M&a,UINT&w,UINT&h){
  auto bytes=std::get<std::vector<uint8_t>>(get(a,"bytes"));if(w<1||h<1||size_t(w)*h*4!=bytes.size())throw std::runtime_error("Invalid RGBA buffer");
  for(size_t i=0;i<bytes.size();i+=4)std::swap(bytes[i],bytes[i+2]);return bytes;
 }
-static void drawImage(HDC dc,const std::vector<uint8_t>&pixels,UINT w,UINT h,RECT area){
- if(!w||!h||pixels.empty())return;
+static void drawImage(HDC dc,const std::vector<uint8_t>&pixels,UINT w,UINT h,RECT area,PaintCache&cache){
+ if(!w||!h||pixels.empty()||area.right<=area.left||area.bottom<=area.top)return;
  const double scale=std::min(double(area.right-area.left)/w,double(area.bottom-area.top)/h);
- const int width=int(w*scale),height=int(h*scale);
+ const int width=std::max(1,int(w*scale)),height=std::max(1,int(h*scale));
  BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=-LONG(h);info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
- SetStretchBltMode(dc,HALFTONE);StretchDIBits(dc,area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,0,0,w,h,pixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+ HDC buffer=CreateCompatibleDC(dc);
+ if(!buffer)return;
+ if(!cache.bitmap||cache.width!=width||cache.height!=height){
+  HBITMAP bitmap=CreateCompatibleBitmap(dc,width,height);
+  if(!bitmap){DeleteDC(buffer);return;}
+  auto old=SelectObject(buffer,bitmap);
+  SetStretchBltMode(buffer,HALFTONE);SetBrushOrgEx(buffer,0,0,nullptr);
+  StretchDIBits(buffer,0,0,width,height,0,0,w,h,pixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+  SelectObject(buffer,old);
+  cache.bitmap=std::shared_ptr<void>(bitmap,[](void*p){DeleteObject(static_cast<HBITMAP>(p));});
+  cache.width=width;cache.height=height;
+ }
+ auto old=SelectObject(buffer,static_cast<HBITMAP>(cache.bitmap.get()));
+ BitBlt(dc,area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,buffer,0,0,SRCCOPY);
+ SelectObject(buffer,old);DeleteDC(buffer);
 }
 static const char* previewActions[]={"Input","Copy seed","刷新","复制","快速保存","保存"};
 static LRESULT CALLBACK previewProc(HWND h,UINT m,WPARAM w,LPARAM l){
  if(m==WM_COMMAND){int id=LOWORD(w);if(id>=1&&id<=6){if(id==1)SetForegroundWindow(owner);emit("previewAction",V(previewActions[id-1]));}return 0;}
  if(m==WM_SIZE){int width=LOWORD(l);for(int i=0;i<6;i++)MoveWindow(GetDlgItem(h,i+1),8+i*92,8,88,28,TRUE);MoveWindow(GetDlgItem(h,20),8,40,std::max(1,width-16),24,TRUE);InvalidateRect(h,nullptr,FALSE);return 0;}
- if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);FillRect(dc,&r,(HBRUSH)(COLOR_WINDOW+1));r.top=72;drawImage(dc,previewPixels,pw,ph,r);EndPaint(h,&ps);return 0;}
+ if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);FillRect(dc,&r,(HBRUSH)(COLOR_WINDOW+1));r.top=72;drawImage(dc,previewPixels,pw,ph,r,previewCache);EndPaint(h,&ps);return 0;}
  if(m==WM_DPICHANGED){auto*r=(RECT*)l;SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE);return 0;}
  if(m==WM_CLOSE){emit("previewClosed",V());ShowWindow(h,SW_HIDE);return 0;}return DefWindowProc(h,m,w,l);
 }
-struct FairItem{std::string seed;UINT width=0,height=0;std::vector<uint8_t>pixels;};
+struct FairItem{PaintCache cache;std::string seed;UINT width=0,height=0;std::vector<uint8_t>pixels;};
 static HWND fair=nullptr;static std::vector<FairItem> fairItems(20);static int fairColumns=2,fairWorkers=1,fairLimit=1,fairScroll=0,fairTarget=0;static int fairEpoch=0;
 static constexpr const wchar_t* preferences=L"Software\\IQ Online Studio\\MusicCardX";
 static DWORD pref(const wchar_t*key,DWORD fallback){DWORD value=0,n=sizeof(value);return RegGetValue(HKEY_CURRENT_USER,preferences,key,RRF_RT_REG_DWORD,nullptr,&value,&n)==ERROR_SUCCESS?value:fallback;}
@@ -109,7 +125,7 @@ static LRESULT CALLBACK fairProc(HWND h,UINT m,WPARAM w,LPARAM l){
  if(m==WM_LBUTTONUP){int x=short(LOWORD(l)),y=short(HIWORD(l));if(y<64)return 0;int cw=fairCellWidth(h),rh=cw*9/16+36;int index=((y-64+fairScroll)/rh)*fairColumns+(x-8)/cw;if(index>=0&&index<20&&!fairItems[index].seed.empty()){emit("fairSeed",V(fairItems[index].seed));SendMessage(h,WM_CLOSE,0,0);}return 0;}
  if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);HDC buffer=CreateCompatibleDC(dc);HBITMAP bitmap=CreateCompatibleBitmap(dc,std::max(1L,r.right),std::max(1L,r.bottom));auto old=SelectObject(buffer,bitmap);FillRect(buffer,&r,(HBRUSH)(COLOR_WINDOW+1));SelectObject(buffer,uiFont);SetBkMode(buffer,TRANSPARENT);
   int cw=fairCellWidth(h),rh=cw*9/16+36;IntersectClipRect(buffer,0,64,r.right,r.bottom);
-  for(int i=0;i<20;i++){int y=64+(i/fairColumns)*rh-fairScroll;if(y+rh<64||y>r.bottom)continue;RECT cell{8+(i%fairColumns)*cw,y,8+(i%fairColumns+1)*cw-8,y+rh-28};drawImage(buffer,fairItems[i].pixels,fairItems[i].width,fairItems[i].height,cell);cell.top=cell.bottom;cell.bottom+=24;auto label=wide(fairItems[i].seed.empty()?"正在生成…":fairItems[i].seed);DrawText(buffer,label.c_str(),-1,&cell,DT_CENTER|DT_SINGLELINE);}
+  for(int i=0;i<20;i++){int y=64+(i/fairColumns)*rh-fairScroll;if(y+rh<64||y>r.bottom)continue;RECT cell{8+(i%fairColumns)*cw,y,8+(i%fairColumns+1)*cw-8,y+rh-28};drawImage(buffer,fairItems[i].pixels,fairItems[i].width,fairItems[i].height,cell,fairItems[i].cache);cell.top=cell.bottom;cell.bottom+=24;auto label=wide(fairItems[i].seed.empty()?"正在生成…":fairItems[i].seed);DrawText(buffer,label.c_str(),-1,&cell,DT_CENTER|DT_SINGLELINE);}
   BitBlt(dc,0,64,r.right,std::max(0L,r.bottom-64),buffer,0,64,SRCCOPY);SelectObject(buffer,old);DeleteObject(bitmap);DeleteDC(buffer);EndPaint(h,&ps);return 0;
  }
  if(m==WM_CLOSE){WINDOWPLACEMENT pos{};pos.length=sizeof(pos);GetWindowPlacement(h,&pos);savePref(L"fairWidth",pos.rcNormalPosition.right-pos.rcNormalPosition.left);savePref(L"fairHeight",pos.rcNormalPosition.bottom-pos.rcNormalPosition.top);savePref(L"fairMaximized",IsZoomed(h));savePref(L"fairColumns",fairColumns);savePref(L"fairWorkers",fairWorkers);emit("fairClose",V());fairItems.assign(20,FairItem{});ShowWindow(h,SW_HIDE);return 0;}
@@ -122,12 +138,12 @@ void NativeRequestClose(){
   [](const std::string&,const std::string&,const V*){PostMessage(owner,WM_APP+1,0,0);},
   [](){PostMessage(owner,WM_APP+1,0,0);}));
 }
-void NativeClose(){if(preview)DestroyWindow(preview);if(fair)DestroyWindow(fair);if(uiFont)DeleteObject(uiFont);channel.reset();}
+void NativeClose(){previewCache={};fairItems.clear();if(preview)DestroyWindow(preview);if(fair)DestroyWindow(fair);if(uiFont)DeleteObject(uiFont);channel.reset();}
 void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  channel=std::make_unique<flutter::MethodChannel<V>>(c->engine()->messenger(),"com.iqonli.musiccardx/windows",&flutter::StandardMethodCodec::GetInstance());
  channel->SetMethodCallHandler([](const flutter::MethodCall<V>&call,std::unique_ptr<flutter::MethodResult<V>>result){try{
  M empty;const M&a=call.arguments()&&std::holds_alternative<M>(*call.arguments())?std::get<M>(*call.arguments()):empty;const auto&m=call.method_name();
- if(m=="locations"){wchar_t exe[32768];GetModuleFileName(nullptr,exe,32768);PWSTR path=nullptr;check(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&path));M v{{V("exe"),V(utf(std::filesystem::path(exe).parent_path().wstring()))},{V("appData"),V(utf(path))}};CoTaskMemFree(path);result->Success(V(v));}
+ if(m=="locations"){wchar_t exe[32768];GetModuleFileName(nullptr,exe,32768);PWSTR path=nullptr;check(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&path));NONCLIENTMETRICS metrics{};metrics.cbSize=sizeof(metrics);SystemParametersInfo(SPI_GETNONCLIENTMETRICS,sizeof(metrics),&metrics,0);M v{{V("uiFontFamily"),V(utf(metrics.lfMessageFont.lfFaceName))},{V("exe"),V(utf(std::filesystem::path(exe).parent_path().wstring()))},{V("appData"),V(utf(path))}};CoTaskMemFree(path);result->Success(V(v));}
  else if(m=="startupTrace"){
  wchar_t report[32768];DWORD n=GetEnvironmentVariable(L"MCX_SMOKE_REPORT",report,32768);
  if(n>0&&n<32768){std::ofstream trace{std::filesystem::path(std::wstring(report)+L".log"),std::ios::app};trace<<str(a,"text")<<std::endl;}
@@ -184,10 +200,10 @@ void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  RECT screen;SystemParametersInfo(SPI_GETWORKAREA,0,&screen,0);int width=std::min(int(pref(L"fairWidth",1200)),int(screen.right-screen.left)),height=std::min(int(pref(L"fairHeight",800)),int(screen.bottom-screen.top));SetWindowPos(fair,nullptr,screen.left+(screen.right-screen.left-width)/2,screen.top+(screen.bottom-screen.top-height)/2,width,height,SWP_NOZORDER);ShowWindow(fair,pref(L"fairMaximized",1)?SW_MAXIMIZE:SW_SHOWNORMAL);SetForegroundWindow(fair);loadFair();result->Success();
  }
  else if(m=="fairItem"){
- if(std::get<int32_t>(get(a,"epoch"))!=fairEpoch){result->Success();return;}int index=std::get<int32_t>(get(a,"index"));if(index<0||index>=20)throw std::runtime_error("Invalid fair index");fairItems[index].pixels=rgbaPixels(a,fairItems[index].width,fairItems[index].height);fairItems[index].seed=str(a,"seed");if(fair)InvalidateRect(fair,nullptr,FALSE);result->Success();
+ if(std::get<int32_t>(get(a,"epoch"))!=fairEpoch){result->Success();return;}int index=std::get<int32_t>(get(a,"index"));if(index<0||index>=20)throw std::runtime_error("Invalid fair index");fairItems[index].cache={};fairItems[index].pixels=rgbaPixels(a,fairItems[index].width,fairItems[index].height);fairItems[index].seed=str(a,"seed");if(fair)InvalidateRect(fair,nullptr,FALSE);result->Success();
  }
  else if(m=="preview"){
- previewPixels=rgbaPixels(a,pw,ph);
+ previewCache={};previewPixels=rgbaPixels(a,pw,ph);
  if(!preview){WNDCLASS wc{};wc.hInstance=GetModuleHandle(nullptr);wc.lpszClassName=L"MusicCardXPreview";wc.lpfnWndProc=previewProc;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hIcon=LoadIcon(wc.hInstance,MAKEINTRESOURCE(101));RegisterClass(&wc);preview=CreateWindow(wc.lpszClassName,L"预览",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1000,650,nullptr,nullptr,wc.hInstance,nullptr);const wchar_t*labels[]={L"Input",L"Copy seed",L"刷新",L"复制",L"快速保存",L"保存"};for(int i=0;i<6;i++)CreateWindow(L"BUTTON",labels[i],WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,8+i*92,8,88,28,preview,(HMENU)(INT_PTR)(i+1),wc.hInstance,nullptr);CreateWindow(L"STATIC",L"",WS_CHILD|WS_VISIBLE,8,40,950,24,preview,(HMENU)20,wc.hInstance,nullptr);setUiFont(preview);}
  SetWindowText(preview,wide(str(a,"title")).c_str());SetWindowText(GetDlgItem(preview,20),wide(str(a,"title")).c_str());InvalidateRect(preview,nullptr,FALSE);if(get(a,"show")==V(true))ShowWindow(preview,SW_SHOWNORMAL);result->Success();
  }

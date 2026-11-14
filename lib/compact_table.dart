@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 /// Explicit column widths avoid DataTable's intrinsic and flex sizing.
-class CompactTextTable extends StatelessWidget {
+class CompactTextTable extends StatefulWidget {
   final Map<String, String> columns;
   final List<List<String>> rows;
   final String family;
@@ -19,7 +19,17 @@ class CompactTextTable extends StatelessWidget {
   });
 
   @override
+  State<CompactTextTable> createState() => _CompactTextTableState();
+}
+class _CompactTextTableState extends State<CompactTextTable> {
+  final _measurements = <Object, double>{};
+  @override
   Widget build(BuildContext context) {
+    final columns = widget.columns;
+    final rows = widget.rows;
+    final family = widget.family;
+    final onHeader = widget.onHeader;
+    final onCell = widget.onCell;
     final keys = columns.keys.toList();
     TextStyle style(int c, String value, {bool header = false}) => TextStyle(
       inherit: false,
@@ -36,6 +46,10 @@ class CompactTextTable extends StatelessWidget {
           : Theme.of(context).colorScheme.onSurface,
     );
     double measure(String text, TextStyle style) {
+      final scaler = MediaQuery.textScalerOf(context);
+      final key = (text, family, style.fontWeight, scaler);
+      final cached = _measurements[key];
+      if (cached != null) return cached;
       final p = TextPainter(
         text: TextSpan(text: text, style: style),
         textDirection: TextDirection.ltr,
@@ -43,6 +57,8 @@ class CompactTextTable extends StatelessWidget {
       )..layout();
       final width = p.width.ceilToDouble();
       p.dispose();
+      if (_measurements.length >= 512) _measurements.clear();
+      _measurements[key] = width;
       return width;
     }
 

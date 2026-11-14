@@ -9,12 +9,14 @@ class PlatformIO extends MethodChannel {
   static const native = MethodChannel('com.iqonli.musiccardx/platform');
   static const desktop = MethodChannel('com.iqonli.musiccardx/windows');
   static bool get windows => Platform.isWindows && !const bool.fromEnvironment('MCX_MOBILE_TEST');
+  static String systemUiFont = 'Segoe UI';
   static Directory? _root;
   static String? startupNotice;
   static final List<Map<String, dynamic>> pending = [];
   static Future<void> initialize() async {
     if (!windows) return;
     final locations = Map<String, dynamic>.from((await desktop.invokeMapMethod<String, dynamic>('locations'))!);
+    systemUiFont = '${locations['uiFontFamily'] ?? 'Segoe UI'}';
     final portable = Directory('${locations['exe']}/Config');
     final app = Directory('${locations['appData']}/IQ Online Studio/MusicCardX');
     final marker = File('${app.path}/location.json');

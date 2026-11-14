@@ -105,6 +105,8 @@ Future<MusicCardX> loadApplicationCore() async {
   return MusicCardX(doc, chinese);
 }
 
+String desktopUiFamily(CardDocument doc) => doc.text('desktopUiFontName').isEmpty ? PlatformIO.systemUiFont : doc.text('desktopUiFontName');
+
 class MusicCardX extends StatelessWidget {
   final CardDocument document;
   final ChineseConverter chinese;
@@ -133,7 +135,7 @@ class MusicCardX extends StatelessWidget {
                   labelLarge: const TextStyle(fontSize: 13),
                 )
                 .apply(
-                  fontFamily: PlatformIO.windows ? 'Segoe UI' : null,
+                  fontFamily: PlatformIO.windows ? desktopUiFamily(document) : null,
                   bodyColor: scheme.onSurface,
                   displayColor: scheme.onSurface,
                 ),
@@ -141,17 +143,17 @@ class MusicCardX extends StatelessWidget {
               titleTextStyle: TextStyle(
                 fontSize: 13,
                 color: scheme.onSurface,
-                fontFamily: PlatformIO.windows ? 'Segoe UI' : 'Roboto',
+                fontFamily: PlatformIO.windows ? desktopUiFamily(document) : 'Roboto',
               ),
               subtitleTextStyle: TextStyle(
                 fontSize: 13,
                 color: scheme.onSurfaceVariant,
-                fontFamily: PlatformIO.windows ? 'Segoe UI' : 'Roboto',
+                fontFamily: PlatformIO.windows ? desktopUiFamily(document) : 'Roboto',
               ),
             ),
             textButtonTheme: TextButtonThemeData(
               style: TextButton.styleFrom(
-                textStyle: TextStyle(fontSize: 13, fontFamily: PlatformIO.windows ? 'Segoe UI' : 'Roboto'),
+                textStyle: TextStyle(fontSize: 13, fontFamily: PlatformIO.windows ? desktopUiFamily(document) : 'Roboto'),
                 minimumSize: const Size(34, 32),
                 backgroundColor: useMonet
                     ? scheme.surfaceContainerHighest
@@ -179,7 +181,7 @@ class MusicCardX extends StatelessWidget {
               isDense: true,
             ),
             cardTheme: const CardThemeData(elevation: 0),
-            fontFamily: PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto',
+            fontFamily: PlatformIO.windows ? desktopUiFamily(document) : 'Roboto',
           ),
           home: Editor(document, chinese),
         );
@@ -206,6 +208,11 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   bool _rendering = false, _again = false, _working = false;
   String? error;
   final updates = ValueNotifier<int>(0);
+  final renderStatus = ValueNotifier<int>(0);
+  void notifyRenderStatus() {
+    if (!mounted) return;
+    if (PlatformIO.windows) { renderStatus.value++; } else { setState(() {}); }
+  }
   bool pinned = true;
   int tab = 0, revision = 0, renderedRevision = -1;
   String? uiFamily;
@@ -267,6 +274,12 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   }
 
   Future<void> _loadUiFont() async {
+    if (PlatformIO.windows) {
+      final preferred = doc.text('desktopUiFontName');
+      if (mounted) setState(() => uiFamily = preferred.isEmpty ? PlatformIO.systemUiFont : preferred);
+      themeChanges.value++;
+      return;
+    }
     try {
       final f = await fonts.family(doc.text('displayFontName'));
       if (mounted) setState(() => uiFamily = f);
@@ -304,6 +317,8 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     renderer.clearBackgroundCache();
     cover?.dispose();
     rendered?.image.dispose();
+    renderStatus.dispose();
+    updates.dispose();
     super.dispose();
   }
 
@@ -354,7 +369,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       await platform.invokeMethod('saveState', {
         'json': jsonEncode(configurationSnapshot()),
       });
-      await maintainStorage();
+      // Periodic/lifecycle maintenance owns directory scans; autosave only writes state.
     } catch (e) {
       message('保存失败：$e');
     }
@@ -388,10 +403,9 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
 
   void workStage(String label, [double? progress]) {
     if (mounted) {
-      setState(() {
-        _workLabel = label;
-        _workProgress = progress;
-      });
+      _workLabel = label;
+      _workProgress = progress;
+      notifyRenderStatus();
     }
   }
 
@@ -469,7 +483,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       return;
     }
     _rendering = true;
-    if (mounted) setState(() {});
+    notifyRenderStatus();
     final token = revision;
     try {
       final result = await renderer.render(
@@ -482,11 +496,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         result.image.dispose();
       } else {
         final old = rendered;
-        setState(() {
-          rendered = result;
-          renderedRevision = token;
-          error = null;
-        });
+        rendered = result;
+        renderedRevision = token;
+        error = null;
+        notifyRenderStatus();
         if(PlatformIO.windows) await desktopPreview(show:false);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           old?.image.dispose();
@@ -494,10 +507,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       }
     } catch (e) {
       await desktopTrace('render failed: $e');
-      if (mounted && token == revision) setState(() => error = '$e');
+      if (mounted && token == revision) { error = '$e'; notifyRenderStatus(); }
     } finally {
       _rendering = false;
-      if (mounted) setState(() {});
+      notifyRenderStatus();
       if (_again) {
         _again = false;
         _preview();
@@ -1068,7 +1081,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   }
 
   Future<void> manageFonts() async {
-    if(PlatformIO.windows){final style=<String,dynamic>{'font':doc.text('displayFontName')};if(await pickFont(style)){doc.data['displayFontName']=style['font'];await _loadUiFont();}return;}
+    if(PlatformIO.windows){final style=<String,dynamic>{'font':doc.text('desktopUiFontName').isEmpty?PlatformIO.systemUiFont:doc.text('desktopUiFontName')};if(await pickFont(style)){doc.data['desktopUiFontName']=style['font'];await _loadUiFont();}return;}
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const FontLibraryPage()),
@@ -1655,14 +1668,14 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       visualDensity: VisualDensity.standard,
       materialTapTargetSize: MaterialTapTargetSize.padded,
       textTheme: Theme.of(context).textTheme
-          .apply(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+          .apply(fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
       listTileTheme: Theme.of(context).listTileTheme.copyWith(
         minTileHeight: 48,
         dense: false,
         titleTextStyle: Theme.of(context).listTileTheme.titleTextStyle
-            ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+            ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
         subtitleTextStyle: Theme.of(context).listTileTheme.subtitleTextStyle
-            ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+            ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
@@ -1674,7 +1687,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(16),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          textStyle: TextStyle(fontSize: 13, fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+          textStyle: TextStyle(fontSize: 13, fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
           visualDensity: VisualDensity.standard,
           tapTargetSize: MaterialTapTargetSize.padded,
         ),
@@ -1941,7 +1954,9 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   Future<void> updatePalette() async {
     final token = ++paletteRequest;
     final colors = await renderer.environment(doc, cover);
-    if (mounted && token == paletteRequest) setState(() => palette = colors);
+    if (mounted && token == paletteRequest && !listEquals(palette, colors)) {
+      setState(() => palette = colors);
+    }
   }
 
   Widget colorPanel() {
@@ -2452,10 +2467,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         ListTile(
           title: const Text('修改显示字体'),
           subtitle: Text(
-            FontRepository.instance.name(doc.text('displayFontName')),
+            PlatformIO.windows ? (doc.text('desktopUiFontName').isEmpty ? '系统默认 ${PlatformIO.systemUiFont}' : doc.text('desktopUiFontName')) : FontRepository.instance.name(doc.text('displayFontName')),
           ),
           onTap: () async {
-            if(PlatformIO.windows){final style=<String,dynamic>{'font':doc.text('displayFontName')};if(await pickFont(style)){doc.data['displayFontName']=style['font'];await _loadUiFont();}return;}
+            if(PlatformIO.windows){final style=<String,dynamic>{'font':doc.text('desktopUiFontName').isEmpty?PlatformIO.systemUiFont:doc.text('desktopUiFontName')};if(await pickFont(style)){doc.data['desktopUiFontName']=style['font'];await _loadUiFont();}return;}
             final id = await Navigator.push<String>(
               context,
               MaterialPageRoute(
@@ -2472,7 +2487,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         ListTile(
           title: const Text('恢复系统界面字体'),
           onTap: () {
-            doc.data['displayFontName'] = '';
+            doc.data[PlatformIO.windows ? 'desktopUiFontName' : 'displayFontName'] = '';
             _loadUiFont();
             changed();
           },
@@ -2645,7 +2660,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
                           textStyle: WidgetStatePropertyAll(
                             TextStyle(
                               fontSize: 13,
-                              fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
+                              fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto'),
                             ),
                           ),
                         ),
@@ -2757,7 +2772,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         for (final row in styleLabels.keys)
           [styleLabels[row]!, for (final k in keys.keys) cell(row, k)],
       ],
-      family: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
+      family: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto'),
       onHeader: (key) {
         if (key != 'element') columnEdit(key);
       },
@@ -2927,15 +2942,15 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         ExpansionTile(title:const Text('程序与输出设置'),children:[settingsPage()]),
         backgroundPanel(),colorPanel(),
         Wrap(spacing:8,runSpacing:4,children:[
-          Text(rendered==null?'正在渲染':'${rendered!.image.width}×${rendered!.image.height} ${rendered!.milliseconds}ms'),
+          ValueListenableBuilder<int>(valueListenable:renderStatus,builder:(context,_,child)=>Text(rendered==null?'正在渲染':'${rendered!.image.width}×${rendered!.image.height} ${rendered!.milliseconds}ms${_rendering ? ' 渲染中' : ''}')),
           ...['Input','Copy seed','刷新','复制','快速保存','保存'].map((label)=>TextButton(onPressed:()=>desktopAction(label),child:Text(label))),
         ]),seeds,
-        ExpansionTile(title:const Text('文字样式表格'),initiallyExpanded:true,children:[SingleChildScrollView(scrollDirection:Axis.horizontal,child:textTable())]),
+        ExpansionTile(title:const Text('文字样式表格'),initiallyExpanded:true,children:[RepaintBoundary(child:textTable())]),
         attributes,lyricsPanel(),if(doc.lyrics['enabled']==true)dividerPanel(),
       ],
-      if(error!=null)Text(error!,style:const TextStyle(color:Colors.red)),
+      ValueListenableBuilder<int>(valueListenable:renderStatus,builder:(context,_,child)=>error==null?const SizedBox.shrink():Text(error!,style:const TextStyle(color:Colors.red))),
     ]);
-    final progress=Center(child:Card(child:Padding(
+    Widget progressPanel()=>Center(child:Card(child:Padding(
       padding:const EdgeInsets.all(24),
       child:SizedBox(width:280,child:Column(mainAxisSize:MainAxisSize.min,children:[
         Text(_workLabel),const SizedBox(height:12),LinearProgressIndicator(value:_workProgress),
@@ -2949,7 +2964,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       appBar:AppBar(title:const Text('MusicCardX')),
       body:Stack(children:[
         Row(children:[NavigationRail(selectedIndex:desktopTab,onDestinationSelected:(index){FocusManager.instance.primaryFocus?.unfocus();commitInput();setState(()=>desktopTab=index);},labelType:NavigationRailLabelType.all,destinations:const [NavigationRailDestination(icon:Icon(Icons.edit_note),label:Text('输入')),NavigationRailDestination(icon:Icon(Icons.tune),label:Text('工作台'))]),const VerticalDivider(width:1),Expanded(child:DesktopSmoothScroll(child:Padding(padding:const EdgeInsets.all(12),child:content)))]),
-        if(_working)Positioned.fill(child:ColoredBox(color:Colors.black38,child:progress)),
+        if(_working)Positioned.fill(child:ValueListenableBuilder<int>(valueListenable:renderStatus,builder:(context,_,child)=>ColoredBox(color:Colors.black38,child:progressPanel()))),
       ]),
     )));
   }
@@ -2968,22 +2983,22 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   );
   @override
   Widget build(BuildContext context) {
-    if(PlatformIO.windows) return Theme(data:Theme.of(context).copyWith(textTheme:Theme.of(context).textTheme.apply(fontFamily:uiFamily??'Segoe UI')),child:desktopWorkbench());
+    if(PlatformIO.windows) return Theme(data:Theme.of(context).copyWith(textTheme:Theme.of(context).textTheme.apply(fontFamily:uiFamily??PlatformIO.systemUiFont)),child:desktopWorkbench());
     return Theme(
       data: Theme.of(context).copyWith(
         listTileTheme: Theme.of(context).listTileTheme.copyWith(
           titleTextStyle: Theme.of(context).listTileTheme.titleTextStyle
-              ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+              ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
           subtitleTextStyle: Theme.of(context).listTileTheme.subtitleTextStyle
-              ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+              ?.copyWith(fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
         ),
         textTheme: Theme.of(context).textTheme
-            .apply(fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto')),
+            .apply(fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto')),
         textButtonTheme: TextButtonThemeData(
           style: TextButton.styleFrom(
             textStyle: TextStyle(
               fontSize: 13,
-              fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
+              fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto'),
             ),
             minimumSize: const Size(34, 32),
             backgroundColor: controlColor(context),
@@ -3100,7 +3115,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
                               : Colors.black54,
                           textStyle: TextStyle(
                             fontSize: 13,
-                            fontFamily: uiFamily ?? (PlatformIO.windows ? 'Microsoft YaHei UI' : 'Roboto'),
+                            fontFamily: uiFamily ?? (PlatformIO.windows ? PlatformIO.systemUiFont : 'Roboto'),
                             fontWeight: tab == e.key
                                 ? FontWeight.w700
                                 : FontWeight.w400,

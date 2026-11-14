@@ -65,7 +65,36 @@ class CardRenderer {
   final _fieldCache = <Object, Future<Map<String, Object>>>{};
   ui.Image? _preparedCoverImage;
   Future<Map<String, Object>>? _preparedCover;
+  Object? _decodedKey;
+  ui.Image? _decodedField;
+  int _cacheGeneration = 0;
+  Future<ui.Image> _decodeField(Map<String, Object> field) async {
+    if (identical(_decodedKey, field) && _decodedField != null) {
+      return _decodedField!.clone();
+    }
+    final generation = _cacheGeneration;
+    final buffer = await ui.ImmutableBuffer.fromUint8List(field['bytes'] as Uint8List);
+    final descriptor = ui.ImageDescriptor.raw(buffer,
+      width: field['width'] as int, height: field['height'] as int,
+      pixelFormat: ui.PixelFormat.rgba8888);
+    try {
+      final codec = await descriptor.instantiateCodec();
+      try {
+        final image = (await codec.getNextFrame()).image;
+        if (generation == _cacheGeneration) {
+          _decodedField?.dispose();
+          _decodedField = image.clone();
+          _decodedKey = field;
+        }
+        return image;
+      } finally { codec.dispose(); }
+    } finally { descriptor.dispose(); buffer.dispose(); }
+  }
   void clearBackgroundCache() {
+    _cacheGeneration++;
+    _decodedField?.dispose();
+    _decodedField = null;
+    _decodedKey = null;
     _fieldCache.clear();
     _preparedCoverImage = null;
     _preparedCover = null;
@@ -321,23 +350,7 @@ class CardRenderer {
       {
         if (fields.parameterRanges.containsKey(doc.text('backgroundStyle'))) {
           final result = await _seedField(doc, palette, cover, width);
-          final buffer = await ui.ImmutableBuffer.fromUint8List(
-            result['bytes'] as Uint8List,
-          );
-          final descriptor = ui.ImageDescriptor.raw(
-            buffer,
-            width: result['width'] as int,
-            height: result['height'] as int,
-            pixelFormat: ui.PixelFormat.rgba8888,
-          );
-          final codec = await descriptor.instantiateCodec();
-          try {
-            fieldImage = (await codec.getNextFrame()).image;
-          } finally {
-            codec.dispose();
-            descriptor.dispose();
-            buffer.dispose();
-          }
+          fieldImage = await _decodeField(result);
           final sigma = _sigma(doc.n('blurStrength'), 20, 1.4);
           canvas.saveLayer(
             bounds,

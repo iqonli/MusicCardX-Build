@@ -4,6 +4,9 @@ using System;
 using System.Text;
 using System.Runtime.InteropServices;
 public static class McxWindow {
+ [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
+ [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int cx,int cy,uint flags);
+ [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string cls,string title);
  public delegate bool EnumProc(IntPtr h,IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p,IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
@@ -41,6 +44,24 @@ try {
   return $true
  },[IntPtr]::Zero) | Out-Null
  if($script:handle -eq [IntPtr]::Zero -or ![McxWindow]::IsWindowVisible($script:handle)) { throw 'Main window not visible' }
+ # Exercise window resizing and rapid wheel traffic on the packaged release.
+ # WM_NULL measures native message responsiveness, not Flutter frame rate.
+ $child=[McxWindow]::FindWindowEx($script:handle,[IntPtr]::Zero,'FLUTTERVIEW',$null)
+ if($child -eq [IntPtr]::Zero) { throw 'Flutter child window missing' }
+ $times=@()
+ for($i=0;$i -lt 40;$i++) {
+  if($i % 10 -eq 0) { [void][McxWindow]::SetWindowPos($script:handle,[IntPtr]::Zero,0,0,(1000+($i%20)*10),800,6) }
+  $delta=if($i -lt 20){-120}else{120}
+  [void][McxWindow]::PostMessage($child,0x20A,[IntPtr]($delta*65536),[IntPtr]::Zero)
+  $watch=[Diagnostics.Stopwatch]::StartNew()
+  $reply=[IntPtr]::Zero
+  if([McxWindow]::SendMessageTimeout($child,0,[IntPtr]::Zero,[IntPtr]::Zero,2,2000,[ref]$reply) -eq [IntPtr]::Zero) { throw 'Flutter child window stopped processing native messages' }
+  $times += $watch.Elapsed.TotalMilliseconds
+  Start-Sleep -Milliseconds 25
+ }
+ $sorted=@($times | Sort-Object)
+ @{nativeMessageP95Ms=$sorted[[int]($sorted.Count*.95)-1];nativeMessageMaxMs=$sorted[-1];samples=$times.Count;note='Native message responsiveness, not Flutter frame times'} | ConvertTo-Json | Tee-Object diagnostics/interaction.json
+ if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" diagnostics/startup.log -Force }
  [void][McxWindow]::PostMessage($script:handle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
  if(!$process.WaitForExit(8000)) { throw 'Window close stalled' }
  if($process.ExitCode -ne 0) { throw "Application exited with code $($process.ExitCode)" }

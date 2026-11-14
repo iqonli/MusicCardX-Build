@@ -19,8 +19,11 @@ class _WheelPosition extends ScrollPositionWithSingleContext {
   void pointerScroll(double delta) {
     if(delta==0 || !hasContentDimensions) return;
     final start=pixels;
-    final previous=isScrollingNotifier.value ? target??start : start;
-    final next=(previous+delta).clamp(minScrollExtent,maxScrollExtent);
+    final pending = isScrollingNotifier.value ? (target ?? start) - start : 0.0;
+    // Reverse immediately, and never queue seconds of travel behind fast input.
+    final previous = pending * delta < 0 ? start : start + pending;
+    final bounded = (previous + delta - start).clamp(-240.0, 240.0);
+    final next=(start+bounded).clamp(minScrollExtent,maxScrollExtent);
     target=next;
     final distance=(next-start).abs();
     if(distance<.5) { jumpTo(next); return; }
@@ -37,6 +40,6 @@ class _DesktopSmoothScrollState extends State<DesktopSmoothScroll> {
   Widget build(BuildContext context)=>Listener(
     onPointerDown:(_){if(controller.hasClients)controller.jumpTo(controller.offset);},
     child:Scrollbar(controller:controller,child:SingleChildScrollView(
-      controller:controller,physics:const ClampingScrollPhysics(),child:widget.child)),
+      controller:controller,physics:const ClampingScrollPhysics(),child:RepaintBoundary(child:widget.child))),
   );
 }

@@ -329,8 +329,8 @@ class FontRepository extends ChangeNotifier {
   Future<void> _initialize() async {
     if (PlatformIO.windows) {
       final files = await PlatformIO.desktop.invokeListMethod<String>('systemFontFiles') ?? [];
-      local = await compute(inspectSystemFonts, files);
       final base=await (const PlatformIO()).invokeMethod<String>('storageRoot');
+      local = await compute(inspectCachedSystemFonts, {'files':files,'cache':'$base/system-font-index.json'});
       final preferences=File('$base/system-font-preview.json');
       if(await preferences.exists()) { try { final v=jsonDecode(await preferences.readAsString()); sample='${v['sample']??sample}'; previewSize=(v['size'] as num? ?? previewSize).toDouble(); } catch (_) {} }
       mode = 'local'; _initialized = true; notifyListeners(); return;
@@ -755,7 +755,7 @@ class FontRepository extends ChangeNotifier {
         .toList();
     final row = exact ? selected : matchFont(group, desired, slant);
     final key = '${row['sha256']}:${row['faceIndex']}';
-    var alias = _loaded[key];
+    String? alias = PlatformIO.windows ? '${row['family']}' : _loaded[key];
     if (alias == null) {
       alias =
           'mcx_${sha256.convert(utf8.encode(key)).toString().substring(0, 16)}';
@@ -1181,5 +1181,35 @@ List<Map<String,dynamic>> inspectSystemFonts(List<String> files) {
       rows.add({...face,'id':'${face['fullName']}','localPath':path,'sha256':path,'fileName':File(path).uri.pathSegments.last});
     }
   } catch (_) { /* Unsupported system font formats are skipped. */ } }
+  return rows;
+}
+
+/// Only metadata is persisted. Font bytes remain owned by Windows.
+List<Map<String, dynamic>> inspectCachedSystemFonts(Map<String, Object?> args) {
+  final cache = File(args['cache'] as String);
+  Map<String, dynamic> previous = {};
+  try {
+    final saved = jsonDecode(cache.readAsStringSync()) as Map<String, dynamic>;
+    if (saved['version'] == 1) previous = Map<String, dynamic>.from(saved['files'] as Map);
+  } catch (_) { /* A missing or corrupt index is rebuilt. */ }
+  final next = <String, dynamic>{};
+  final rows = <Map<String, dynamic>>[];
+  for (final path in (args['files'] as List).cast<String>()) {
+    try {
+      final stat = File(path).statSync();
+      final signature = '${stat.size}:${stat.modified.microsecondsSinceEpoch}';
+      final saved = previous[path];
+      final faces = saved is Map && saved['signature'] == signature
+          ? (saved['rows'] as List).map((r) => Map<String, dynamic>.from(r as Map)).toList()
+          : inspectSystemFonts([path]);
+      next[path] = {'signature':signature,'rows':faces};
+      rows.addAll(faces);
+    } catch (_) { /* Removed/unreadable fonts cannot block startup. */ }
+  }
+  try {
+    final temp = File('${cache.path}.tmp');
+    temp.writeAsStringSync(jsonEncode({'version':1,'files':next}), flush:true);
+    temp.renameSync(cache.path);
+  } catch (_) { /* The in-memory index remains usable in read-only locations. */ }
   return rows;
 }

@@ -103,6 +103,7 @@ class CardDocument {
   }
 
   factory CardDocument.fresh() => CardDocument({
+    'desktopUiFontName': '',
     'musicCardXVersion': '1.5.1',
     'styleSchemaVersion': 16,
     'musicCardXSchemaVersion': 1,
@@ -864,6 +865,7 @@ Color opacity(Color c, dynamic alpha) =>
 double luminance(Color c) => .299 * c.r + .587 * c.g + .114 * c.b;
 
 class FontRegistry {
+  final _resolved = <Object, LoadedFont>{};
   final Map<String, String> names = {};
   Future<String?> family(String id) async {
     try {
@@ -884,13 +886,21 @@ class FontRegistry {
     bool? italic,
     int? weight,
   }) async {
+    final repo = FontRepository.instance;
+    final key = (id, bold, italic, weight, repo.local);
+    if (PlatformIO.windows && _resolved.containsKey(key)) return _resolved[key]!;
     try {
-      return await FontRepository.instance.resolve(
+      final resolved = await repo.resolve(
         id,
         bold: bold,
         italic: italic,
         weight: weight,
       );
+      if (PlatformIO.windows) {
+        if (_resolved.length >= 128) _resolved.clear();
+        _resolved[key] = resolved;
+      }
+      return resolved;
     } catch (_) {
       return LoadedFont(
         null,
@@ -900,5 +910,5 @@ class FontRegistry {
     }
   }
 
-  void clear() {}
+  void clear() { _resolved.clear(); }
 }
