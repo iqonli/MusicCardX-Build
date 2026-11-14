@@ -93,6 +93,7 @@ jobs:
         with:
           name: Windows-validation-${{ github.run_number }}
           path: |
+            diagnostics/
             analyze.txt
             tests.txt
             desktop-tests.txt

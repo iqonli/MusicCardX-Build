@@ -23,7 +23,8 @@ try {
  $hash=(Get-FileHash "$temp/flutter_windows.dll" -Algorithm SHA256).Hash.ToLower()
  if($hash -ne $requirement.sha256) { throw 'Flutter runtime does not match APP package' }
  $env:MCX_SMOKE_REPORT=Join-Path $temp 'ready.txt'
- $process=Start-Process "$temp/MusicCardX.exe" -WorkingDirectory $env:RUNNER_TEMP -PassThru
+ New-Item diagnostics -ItemType Directory -Force | Out-Null
+ $process=Start-Process "$temp/MusicCardX.exe" -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput "$PWD/diagnostics/stdout.txt" -RedirectStandardError "$PWD/diagnostics/stderr.txt" -PassThru
  $deadline=(Get-Date).AddSeconds(60)
  while (!(Test-Path $env:MCX_SMOKE_REPORT)) {
   if($process.HasExited) { throw "Application exited before editor readiness: $($process.ExitCode)" }
@@ -44,6 +45,19 @@ try {
  if(!$process.WaitForExit(8000)) { throw 'Window close stalled' }
  if($process.ExitCode -ne 0) { throw "Application exited with code $($process.ExitCode)" }
  'Editor initialized and native main window closed successfully.'
+} catch {
+ if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" diagnostics/startup.log -Force; Get-Content diagnostics/startup.log }
+ Get-Content diagnostics/stderr.txt -ErrorAction SilentlyContinue
+ try {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $bounds=[Windows.Forms.SystemInformation]::VirtualScreen
+  $bitmap=New-Object Drawing.Bitmap $bounds.Width,$bounds.Height
+  $graphics=[Drawing.Graphics]::FromImage($bitmap)
+  try { $graphics.CopyFromScreen($bounds.Location,[Drawing.Point]::Empty,$bounds.Size);$bitmap.Save("$PWD/diagnostics/desktop.png") }
+  finally { $graphics.Dispose();$bitmap.Dispose() }
+ } catch { Write-Warning "Screenshot unavailable: $_" }
+ throw
 } finally {
  if($process -and !$process.HasExited) { Stop-Process -Id $process.Id -Force }
  Remove-Item Env:MCX_SMOKE_REPORT -ErrorAction SilentlyContinue

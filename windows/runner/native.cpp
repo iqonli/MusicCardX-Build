@@ -128,6 +128,11 @@ void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  channel->SetMethodCallHandler([](const flutter::MethodCall<V>&call,std::unique_ptr<flutter::MethodResult<V>>result){try{
  M empty;const M&a=call.arguments()&&std::holds_alternative<M>(*call.arguments())?std::get<M>(*call.arguments()):empty;const auto&m=call.method_name();
  if(m=="locations"){wchar_t exe[32768];GetModuleFileName(nullptr,exe,32768);PWSTR path=nullptr;check(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&path));M v{{V("exe"),V(utf(std::filesystem::path(exe).parent_path().wstring()))},{V("appData"),V(utf(path))}};CoTaskMemFree(path);result->Success(V(v));}
+ else if(m=="startupTrace"){
+ wchar_t report[32768];DWORD n=GetEnvironmentVariable(L"MCX_SMOKE_REPORT",report,32768);
+ if(n>0&&n<32768){std::ofstream trace{std::filesystem::path(std::wstring(report)+L".log"),std::ios::app};trace<<str(a,"text")<<std::endl;}
+ result->Success();
+ }
  else if(m=="editorReady"){
  wchar_t report[32768];DWORD n=GetEnvironmentVariable(L"MCX_SMOKE_REPORT",report,32768);
  if(n>0&&n<32768){std::ofstream f{std::filesystem::path(report)};f<<"editor-ready";}

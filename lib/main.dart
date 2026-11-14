@@ -59,7 +59,22 @@ void main() async {
   }
 }
 
+Future<void> desktopTrace(String text) async {
+  if(!PlatformIO.windows)return;
+  try { await PlatformIO.desktop.invokeMethod<void>('startupTrace',{'text':text}); } catch (_) {}
+}
 Future<MusicCardX> loadApplication() async {
+  try {
+    await desktopTrace('application initialization started');
+    final app=await loadApplicationCore();
+    await desktopTrace('application initialization completed');
+    return app;
+  } catch(error,stack) {
+    await desktopTrace('application initialization failed: $error\n$stack');
+    rethrow;
+  }
+}
+Future<MusicCardX> loadApplicationCore() async {
   await PlatformIO.initialize();
   await CardDocument.initialize();
   final chinese = ChineseConverter();
@@ -237,11 +252,14 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   bool _fontStartupFailed = false;
   Future<void> initializeFontsAndCover() async {
     try {
+      await desktopTrace('loading system fonts');
       await FontRepository.instance.init();
+      await desktopTrace('system fonts loaded');
       await _loadUiFont();
       if (!_fontsReady.isCompleted) _fontsReady.complete();
-      if (mounted) await _loadCover();
+      if (mounted) { await desktopTrace('loading cover and first render'); await _loadCover(); }
     } catch (e) {
+      await desktopTrace('font initialization failed: $e');
       _fontStartupFailed = true;
       if (!_fontsReady.isCompleted) _fontsReady.complete();
       if (mounted) setState(() => error = '字体初始化失败：$e');
@@ -475,6 +493,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         });
       }
     } catch (e) {
+      await desktopTrace('render failed: $e');
       if (mounted && token == revision) setState(() => error = '$e');
     } finally {
       _rendering = false;
@@ -2823,6 +2842,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   });
   Future<void> desktopPreview({bool show=true}) async {
     final current=rendered; if(current==null||(!show&&desktopPreviewHidden))return;
+    await desktopTrace('preparing native preview');
     final recorder=ui.PictureRecorder(); final canvas=Canvas(recorder);
     final scale=1600/current.image.width;
     final factor=scale<1?scale:1.0;
@@ -2832,13 +2852,15 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     final image=await picture.toImage((current.image.width*factor).round(),(current.image.height*factor).round()); picture.dispose();
     try { final bytes=await image.toByteData(format:ui.ImageByteFormat.rawRgba); if(bytes==null)return;
       await PlatformIO.desktop.invokeMethod('preview',{'bytes':bytes.buffer.asUint8List(),'width':image.width,'height':image.height,'seed':current.seed,'show':show || !desktopPreviewOpened,'title':'MusicCardX  ${current.image.width}×${current.image.height}  ${current.milliseconds}ms  ${doc.n('exportScale',1)}x  seed ${current.seed}'});
+      await desktopTrace('native preview updated');
       desktopPreviewOpened=true;
       if(show)desktopPreviewHidden=false;
       if(!desktopReadySent) {
         desktopReadySent=true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          unawaited(PlatformIO.desktop.invokeMethod<void>('editorReady'));
-        });
+        // endOfFrame schedules a frame even if async image work completed idle.
+        // A bare post-frame callback can otherwise wait for an unrelated event.
+        await WidgetsBinding.instance.endOfFrame;
+        await PlatformIO.desktop.invokeMethod<void>('editorReady');
       }
     } finally { image.dispose(); }
   }
