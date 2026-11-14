@@ -94,8 +94,8 @@ static constexpr const wchar_t* preferences=L"Software\\IQ Online Studio\\MusicC
 static DWORD pref(const wchar_t*key,DWORD fallback){DWORD value=0,n=sizeof(value);return RegGetValue(HKEY_CURRENT_USER,preferences,key,RRF_RT_REG_DWORD,nullptr,&value,&n)==ERROR_SUCCESS?value:fallback;}
 static void savePref(const wchar_t*key,DWORD value){HKEY h;if(RegCreateKeyEx(HKEY_CURRENT_USER,preferences,0,nullptr,0,KEY_SET_VALUE,nullptr,&h,nullptr)==ERROR_SUCCESS){RegSetValueEx(h,key,0,REG_DWORD,(BYTE*)&value,sizeof(value));RegCloseKey(h);}}
 static void loadFair(){fairItems.assign(20,FairItem{});fairScroll=fairTarget=0;InvalidateRect(fair,nullptr,TRUE);emit("fairLoad",V(M{{V("workers"),V(fairWorkers)},{V("epoch"),V(++fairEpoch)}}));}
-static int fairCellWidth(HWND h){RECT r;GetClientRect(h,&r);return std::max(20,(r.right-24)/fairColumns);}
-static void clampFair(){if(!fair)return;RECT r;GetClientRect(fair,&r);int rows=(20+fairColumns-1)/fairColumns;int maximum=std::max(0,rows*(fairCellWidth(fair)*9/16+36)-(r.bottom-64));fairTarget=std::clamp(fairTarget,0,maximum);}
+static int fairCellWidth(HWND h){RECT r;GetClientRect(h,&r);return std::max(20,int(r.right-24)/fairColumns);}
+static void clampFair(){if(!fair)return;RECT r;GetClientRect(fair,&r);int rows=(20+fairColumns-1)/fairColumns;int maximum=std::max(0,rows*(fairCellWidth(fair)*9/16+36)-int(r.bottom-64));fairTarget=std::clamp(fairTarget,0,maximum);}
 static LRESULT CALLBACK fairProc(HWND h,UINT m,WPARAM w,LPARAM l){
  if(m==WM_COMMAND){int id=LOWORD(w);
   if(id==35){wchar_t text[20];GetWindowText(GetDlgItem(h,34),text,20);fairWorkers=std::clamp(_wtoi(text),1,fairLimit);loadFair();}
@@ -104,7 +104,7 @@ static LRESULT CALLBACK fairProc(HWND h,UINT m,WPARAM w,LPARAM l){
  }
  if(m==WM_HSCROLL){fairColumns=int(SendMessage(GetDlgItem(h,31),TBM_GETPOS,0,0));SetWindowText(GetDlgItem(h,32),std::to_wstring(fairColumns).c_str());clampFair();InvalidateRect(h,nullptr,TRUE);return 0;}
  if(m==WM_MOUSEWHEEL){fairTarget-=GET_WHEEL_DELTA_WPARAM(w);clampFair();SetTimer(h,7,16,nullptr);return 0;}
- if(m==WM_TIMER&&w==7){int distance=fairTarget-fairScroll;fairScroll+=std::abs(distance)<3?distance:distance/4;InvalidateRect(h,nullptr,FALSE);if(fairScroll==fairTarget)KillTimer(h,7);return 0;}
+ if(m==WM_TIMER&&w==7){int distance=fairTarget-fairScroll;fairScroll+=std::clamp(distance,-19,19);InvalidateRect(h,nullptr,FALSE);if(fairScroll==fairTarget)KillTimer(h,7);return 0;}
  if(m==WM_SIZE){clampFair();InvalidateRect(h,nullptr,TRUE);return 0;}
  if(m==WM_LBUTTONUP){int x=short(LOWORD(l)),y=short(HIWORD(l));if(y<64)return 0;int cw=fairCellWidth(h),rh=cw*9/16+36;int index=((y-64+fairScroll)/rh)*fairColumns+(x-8)/cw;if(index>=0&&index<20&&!fairItems[index].seed.empty()){emit("fairSeed",V(fairItems[index].seed));SendMessage(h,WM_CLOSE,0,0);}return 0;}
  if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);HDC buffer=CreateCompatibleDC(dc);HBITMAP bitmap=CreateCompatibleBitmap(dc,std::max(1L,r.right),std::max(1L,r.bottom));auto old=SelectObject(buffer,bitmap);FillRect(buffer,&r,(HBRUSH)(COLOR_WINDOW+1));SelectObject(buffer,uiFont);SetBkMode(buffer,TRANSPARENT);

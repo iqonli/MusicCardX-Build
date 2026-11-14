@@ -1,29 +1,42 @@
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+/// Smooth mouse-wheel travel at a fixed speed, with no inertial tail.
 class DesktopSmoothScroll extends StatefulWidget {
   final Widget child;
   const DesktopSmoothScroll({super.key,required this.child});
   @override
   State<DesktopSmoothScroll> createState()=>_DesktopSmoothScrollState();
 }
+class _WheelController extends ScrollController {
+  @override
+  ScrollPosition createScrollPosition(ScrollPhysics physics,ScrollContext context,ScrollPosition? oldPosition) =>
+      _WheelPosition(physics:physics,context:context,oldPosition:oldPosition);
+}
+class _WheelPosition extends ScrollPositionWithSingleContext {
+  _WheelPosition({required super.physics,required super.context,super.oldPosition});
+  double? target;
+  @override
+  void pointerScroll(double delta) {
+    if(delta==0 || !hasContentDimensions) return;
+    final start=pixels;
+    final previous=isScrollingNotifier.value ? target??start : start;
+    final next=(previous+delta).clamp(minScrollExtent,maxScrollExtent);
+    target=next;
+    final distance=(next-start).abs();
+    if(distance<.5) { jumpTo(next); return; }
+    // Duration follows distance so repeated wheel events do not increase speed.
+    final milliseconds=(distance/1.2).ceil().clamp(1,10000);
+    animateTo(next,duration:Duration(milliseconds:milliseconds),curve:Curves.linear);
+  }
+}
 class _DesktopSmoothScrollState extends State<DesktopSmoothScroll> {
-  final controller=ScrollController();
-  double target=0;
+  final controller=_WheelController();
   @override
   void dispose(){controller.dispose();super.dispose();}
   @override
   Widget build(BuildContext context)=>Listener(
-    onPointerDown:(_){if(controller.hasClients){target=controller.offset;controller.jumpTo(target);}},
-    onPointerSignal:(event){
-      if(event is PointerScrollEvent && controller.hasClients){
-        GestureBinding.instance.pointerSignalResolver.register(event,(_){
-          if(!controller.position.isScrollingNotifier.value)target=controller.offset;
-          target=(target+event.scrollDelta.dy).clamp(0,controller.position.maxScrollExtent);
-          controller.animateTo(target,duration:const Duration(milliseconds:180),curve:Curves.easeOutCubic);
-        });
-      }
-    },
-    child:Scrollbar(controller:controller,child:SingleChildScrollView(controller:controller,child:widget.child)),
+    onPointerDown:(_){if(controller.hasClients)controller.jumpTo(controller.offset);},
+    child:Scrollbar(controller:controller,child:SingleChildScrollView(
+      controller:controller,physics:const ClampingScrollPhysics(),child:widget.child)),
   );
 }
