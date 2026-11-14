@@ -35,4 +35,11 @@ void main() {
     expect(state.position.pixels,lessThan(middle));
     expect(state.position.pixels,lessThanOrEqualTo(240));
   });
+  testWidgets('offscreen desktop sections are not mounted', (tester) async {
+    await tester.pumpWidget(MaterialApp(home:Scaffold(body:DesktopSmoothScroll(
+      children:List.generate(100,(i)=>SizedBox(height:150,child:Text('section-$i'))),
+    ))));
+    expect(find.text('section-0'),findsOneWidget);
+    expect(find.text('section-99'),findsNothing);
+  });
 }

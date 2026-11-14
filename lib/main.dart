@@ -2939,7 +2939,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       ]),
       Wrap(spacing:4,runSpacing:4,children:styleControls(doc.styles[desktopElement])),
     ]);
-    final content=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
+    final content=<Widget>[
       if(desktopTab==0) inputPage() else ...[
         tools,
         ExpansionTile(title:const Text('程序与输出设置'),children:[settingsPage()]),
@@ -2952,7 +2952,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         attributes,lyricsPanel(),if(doc.lyrics['enabled']==true)dividerPanel(),
       ],
       ValueListenableBuilder<int>(valueListenable:renderStatus,builder:(context,_,child)=>error==null?const SizedBox.shrink():Text(error!,style:const TextStyle(color:Colors.red))),
-    ]);
+    ];
     Widget progressPanel()=>Center(child:Card(child:Padding(
       padding:const EdgeInsets.all(24),
       child:SizedBox(width:280,child:Column(mainAxisSize:MainAxisSize.min,children:[
@@ -2966,7 +2966,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     },child:Focus(autofocus:true,child:Scaffold(
       appBar:AppBar(title:const Text('MusicCardX')),
       body:Stack(children:[
-        Row(children:[NavigationRail(selectedIndex:desktopTab,onDestinationSelected:(index){FocusManager.instance.primaryFocus?.unfocus();commitInput();setState(()=>desktopTab=index);},labelType:NavigationRailLabelType.all,destinations:const [NavigationRailDestination(icon:Icon(Icons.edit_note),label:Text('输入')),NavigationRailDestination(icon:Icon(Icons.tune),label:Text('工作台'))]),const VerticalDivider(width:1),Expanded(child:DesktopSmoothScroll(child:Padding(padding:const EdgeInsets.all(12),child:content)))]),
+        Row(children:[NavigationRail(selectedIndex:desktopTab,onDestinationSelected:(index){FocusManager.instance.primaryFocus?.unfocus();commitInput();setState(()=>desktopTab=index);},labelType:NavigationRailLabelType.all,destinations:const [NavigationRailDestination(icon:Icon(Icons.edit_note),label:Text('输入')),NavigationRailDestination(icon:Icon(Icons.tune),label:Text('工作台'))]),const VerticalDivider(width:1),Expanded(child:DesktopSmoothScroll(key:PageStorageKey('desktop-$desktopTab'),padding:const EdgeInsets.all(12),children:content))]),
         if(_working)Positioned.fill(child:ValueListenableBuilder<int>(valueListenable:renderStatus,builder:(context,_,child)=>ColoredBox(color:Colors.black38,child:progressPanel()))),
       ]),
     )));

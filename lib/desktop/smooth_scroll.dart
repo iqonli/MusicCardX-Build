@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 
 /// Smooth mouse-wheel travel at a fixed speed, with no inertial tail.
 class DesktopSmoothScroll extends StatefulWidget {
-  final Widget child;
-  const DesktopSmoothScroll({super.key,required this.child});
+  final Widget? child;
+  final List<Widget>? children;
+  final EdgeInsetsGeometry padding;
+  const DesktopSmoothScroll({super.key,this.child,this.children,this.padding=EdgeInsets.zero})
+      : assert((child == null) != (children == null));
   @override
   State<DesktopSmoothScroll> createState()=>_DesktopSmoothScrollState();
 }
@@ -39,7 +42,10 @@ class _DesktopSmoothScrollState extends State<DesktopSmoothScroll> {
   @override
   Widget build(BuildContext context)=>Listener(
     onPointerDown:(_){if(controller.hasClients)controller.jumpTo(controller.offset);},
-    child:Scrollbar(controller:controller,child:SingleChildScrollView(
-      controller:controller,physics:const ClampingScrollPhysics(),child:RepaintBoundary(child:widget.child))),
+    child:Scrollbar(controller:controller,child:widget.children != null
+      ? ListView(controller:controller,physics:const ClampingScrollPhysics(),
+          padding:widget.padding,cacheExtent:200,children:widget.children!)
+      : SingleChildScrollView(controller:controller,physics:const ClampingScrollPhysics(),
+          padding:widget.padding,child:RepaintBoundary(child:widget.child!))),
   );
 }
