@@ -61,7 +61,8 @@ class RenderCancelledException implements Exception {
 class CardRenderer {
   final ChineseConverter chinese;
   final FontRegistry fonts;
-  CardRenderer(this.chinese, this.fonts);
+  final int nativeThreads;
+  CardRenderer(this.chinese, this.fonts, {this.nativeThreads = 0});
   final _fieldCache = <Object, Future<Map<String, Object>>>{};
   ui.Image? _preparedCoverImage;
   Future<Map<String, Object>>? _preparedCover;
@@ -145,6 +146,7 @@ class CardRenderer {
       }
       return compute(fields.renderSeedBackground, <String, Object?>{
         'mode': mode,
+        'threads': nativeThreads,
         'seed': seed,
         'width': width,
         'height': 400.0,

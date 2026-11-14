@@ -1,3 +1,4 @@
+import 'desktop/frame_metrics.dart';
 import 'desktop/smooth_scroll.dart';
 // ignore_for_file: curly_braces_in_flow_control
 import 'desktop/platform_io.dart';
@@ -199,6 +200,7 @@ class Editor extends StatefulWidget {
 }
 
 class _EditorState extends State<Editor> with WidgetsBindingObserver {
+  final desktopMetrics = DesktopFrameMetrics();
   late CardDocument doc;
   late CardRenderer renderer;
   final fonts = FontRegistry();
@@ -220,7 +222,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     platform.setMethodCallHandler((call) async {
-      if (call.method == 'closing') { commitInput(); await _save(); await maintainStorage(); }
+      if (call.method == 'closing') { await desktopMetrics.finish(); commitInput(); await _save(); await maintainStorage(); }
       if (call.method == 'dropFiles') await desktopFiles((call.arguments as List).cast<String>());
       if (call.method == 'previewClosed') desktopPreviewHidden=true;
       if (call.method == 'previewAction') await desktopAction(call.arguments as String);
@@ -234,10 +236,11 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         workStage(_workLabel, (call.arguments as num).toDouble().clamp(0, 1));
       }
     });
+    if (PlatformIO.windows) desktopMetrics.start();
     doc = widget.document;
     useMonet = doc.data['monet'] == true;
     pinned = doc.data['previewPinned'] != false;
-    renderer = CardRenderer(widget.chinese, fonts);
+    renderer = CardRenderer(widget.chinese, fonts, nativeThreads: PlatformIO.windows ? (Platform.numberOfProcessors ~/ 2).clamp(1,4) : 0);
     WidgetsBinding.instance.addObserver(this);
     initializeFontsAndCover();
     if(PlatformIO.windows) {
@@ -2826,7 +2829,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     final workers=requested.clamp(1,desktopFairLimit);
     try {
       await Future.wait(List.generate(workers,(_) async {
-        final localRenderer=CardRenderer(widget.chinese,FontRegistry());
+        final localRenderer=CardRenderer(widget.chinese,FontRegistry(),nativeThreads:(Platform.numberOfProcessors ~/ 2 ~/ workers).clamp(1,4));
         try { while(mounted&&token==desktopFairGeneration&&next<20) {
           final index=next++;
           final candidate=CardDocument(deepCopy(snapshot));candidate.data['seed']=newSeed();

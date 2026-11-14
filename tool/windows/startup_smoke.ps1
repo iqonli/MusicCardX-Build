@@ -7,6 +7,8 @@ public static class McxWindow {
  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr h,uint m,IntPtr w,IntPtr l,uint flags,uint timeout,out IntPtr result);
  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h,IntPtr after,int x,int y,int cx,int cy,uint flags);
  [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parent,IntPtr after,string cls,string title);
+ [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect rect);
  public delegate bool EnumProc(IntPtr h,IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p,IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
@@ -52,7 +54,11 @@ try {
  for($i=0;$i -lt 40;$i++) {
   if($i % 10 -eq 0) { [void][McxWindow]::SetWindowPos($script:handle,[IntPtr]::Zero,0,0,(1000+($i%20)*10),800,6) }
   $delta=if($i -lt 20){-120}else{120}
-  [void][McxWindow]::PostMessage($child,0x20A,[IntPtr]($delta*65536),[IntPtr]::Zero)
+  $rect=New-Object McxWindow+Rect
+  [void][McxWindow]::GetWindowRect($child,[ref]$rect)
+  $x=[int](($rect.left+$rect.right)/2)
+  $y=[int](($rect.top+$rect.bottom)/2)
+  [void][McxWindow]::PostMessage($child,0x20A,[IntPtr]($delta*65536),[IntPtr](($y -shl 16) -bor ($x -band 65535)))
   $watch=[Diagnostics.Stopwatch]::StartNew()
   $reply=[IntPtr]::Zero
   if([McxWindow]::SendMessageTimeout($child,0,[IntPtr]::Zero,[IntPtr]::Zero,2,2000,[ref]$reply) -eq [IntPtr]::Zero) { throw 'Flutter child window stopped processing native messages' }
@@ -65,7 +71,9 @@ try {
  [void][McxWindow]::PostMessage($script:handle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
  if(!$process.WaitForExit(8000)) { throw 'Window close stalled' }
  if($process.ExitCode -ne 0) { throw "Application exited with code $($process.ExitCode)" }
- 'Editor initialized and native main window closed successfully.'
+ if(Test-Path "$env:MCX_SMOKE_REPORT.frames.json") { Copy-Item "$env:MCX_SMOKE_REPORT.frames.json" diagnostics/frames.json;Get-Content diagnostics/frames.json }
+ else { throw 'Release frame metrics were not written' }
+ 'Editor initialized, wheel/resize exercised, and native main window closed successfully.'
 } catch {
  if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" diagnostics/startup.log -Force; Get-Content diagnostics/startup.log }
  Get-Content diagnostics/stderr.txt -ErrorAction SilentlyContinue
