@@ -1,3 +1,4 @@
+import 'desktop/smooth_scroll.dart';
 // ignore_for_file: curly_braces_in_flow_control
 import 'desktop/platform_io.dart';
 import 'desktop/startup.dart';
@@ -117,6 +118,7 @@ class MusicCardX extends StatelessWidget {
                   labelLarge: const TextStyle(fontSize: 13),
                 )
                 .apply(
+                  fontFamily: PlatformIO.windows ? 'Segoe UI' : null,
                   bodyColor: scheme.onSurface,
                   displayColor: scheme.onSurface,
                 ),
@@ -124,17 +126,17 @@ class MusicCardX extends StatelessWidget {
               titleTextStyle: TextStyle(
                 fontSize: 13,
                 color: scheme.onSurface,
-                fontFamily: 'Roboto',
+                fontFamily: PlatformIO.windows ? 'Segoe UI' : 'Roboto',
               ),
               subtitleTextStyle: TextStyle(
                 fontSize: 13,
                 color: scheme.onSurfaceVariant,
-                fontFamily: 'Roboto',
+                fontFamily: PlatformIO.windows ? 'Segoe UI' : 'Roboto',
               ),
             ),
             textButtonTheme: TextButtonThemeData(
               style: TextButton.styleFrom(
-                textStyle: const TextStyle(fontSize: 13, fontFamily: 'Roboto'),
+                textStyle: TextStyle(fontSize: 13, fontFamily: PlatformIO.windows ? 'Segoe UI' : 'Roboto'),
                 minimumSize: const Size(34, 32),
                 backgroundColor: useMonet
                     ? scheme.surfaceContainerHighest
@@ -198,7 +200,11 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     platform.setMethodCallHandler((call) async {
       if (call.method == 'closing') { commitInput(); await _save(); await maintainStorage(); }
       if (call.method == 'dropFiles') await desktopFiles((call.arguments as List).cast<String>());
-      if (call.method == 'previewAction') await export(call.arguments as String);
+      if (call.method == 'previewClosed') desktopPreviewHidden=true;
+      if (call.method == 'previewAction') await desktopAction(call.arguments as String);
+      if (call.method == 'fairSeed') { doc.data['seed']=call.arguments as String; changed(); }
+      if (call.method == 'fairLoad') { final args=Map<String,dynamic>.from(call.arguments as Map);unawaited(loadDesktopFair((args['workers'] as num).toInt(),(args['epoch'] as num).toInt())); }
+      if (call.method == 'fairClose') desktopFairGeneration++;
       if (call.method == 'incoming') await incoming();
       if (call.method == 'exportProgress' &&
           _working &&
@@ -212,6 +218,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     renderer = CardRenderer(widget.chinese, fonts);
     WidgetsBinding.instance.addObserver(this);
     initializeFontsAndCover();
+    if(PlatformIO.windows) {
+      PlatformIO.desktop.invokeMethod<bool>('getGpuPreference').then((value){if(mounted)setState(()=>desktopPreferGpu=value??true);});
+      platform.invokeMethod<String>('storageRoot').then((value){if(mounted)setState(()=>desktopRoot=value??'');});
+    }
     _maintenanceTimer = Timer.periodic(
       const Duration(minutes: 2),
       (_) => maintainStorage(),
@@ -249,7 +259,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && !PlatformIO.windows) {
       incoming();
       FontRepository.instance.refresh().then((_) {
         fonts.clear();
@@ -371,7 +381,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     if (!mounted) return;
     revision++;
     useMonet = doc.data['monet'] == true;
-    themeChanges.value++;
+    if (!PlatformIO.windows) themeChanges.value++;
     updates.value++;
     updatePalette();
     setState(() => error = null);
@@ -1011,6 +1021,11 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     ),
   );
   Future<bool> pickFont(Map<String, dynamic> map) async {
+    if(PlatformIO.windows) {
+      final selected=await PlatformIO.desktop.invokeMapMethod<String,dynamic>('chooseFont',{'family':map['font']??'', 'weight':map['weight']??400,'size':map['size']??13,'italic':map['italic']==true});
+      if(selected==null)return false;
+      map.addAll(selected); map['bold']=false; changed(); return true;
+    }
     try {
       final id = await Navigator.push<String>(
         context,
@@ -1034,6 +1049,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   }
 
   Future<void> manageFonts() async {
+    if(PlatformIO.windows){final style=<String,dynamic>{'font':doc.text('displayFontName')};if(await pickFont(style)){doc.data['displayFontName']=style['font'];await _loadUiFont();}return;}
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const FontLibraryPage()),
@@ -1200,6 +1216,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     }
     doc = next;
     await applyConfigurationPreferences(parsed);
+    await resolveMissingFonts();
     changed();
     _timer?.cancel();
     await _loadCover();
@@ -2011,6 +2028,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   }
 
   Future<void> seedFair() async {
+    if(PlatformIO.windows) {
+      await PlatformIO.desktop.invokeMethod('fairOpen',{'limit':desktopFairLimit});
+      return;
+    }
     final value = await Navigator.push<String>(
       context,
       MaterialPageRoute(
@@ -2378,6 +2399,9 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         ListTile(title:const Text('配置目录'),subtitle:Text(desktopRoot)),
         Wrap(children:[TextButton(onPressed:()=>switchStorage(false),child:const Text('程序目录Config')),TextButton(onPressed:()=>switchStorage(true),child:const Text('LocalAppData'))]),
       ]),
+      if(PlatformIO.windows) normalSection('GPU',[
+        SwitchListTile(title:const Text('优先高性能GPU'),subtitle:const Text('重启生效，背景算法仍使用CPU'),value:desktopPreferGpu,onChanged:(value)async{await PlatformIO.desktop.invokeMethod('gpuPreference',{'enabled':value});setState(()=>desktopPreferGpu=value);}),
+      ]),
       normalSection('显示', [
         setting(
           '文本对齐模式',
@@ -2412,6 +2436,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
             FontRepository.instance.name(doc.text('displayFontName')),
           ),
           onTap: () async {
+            if(PlatformIO.windows){final style=<String,dynamic>{'font':doc.text('displayFontName')};if(await pickFont(style)){doc.data['displayFontName']=style['font'];await _loadUiFont();}return;}
             final id = await Navigator.push<String>(
               context,
               MaterialPageRoute(
@@ -2728,8 +2753,62 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     );
   }
 
+  bool desktopPreferGpu=true;
+  int desktopTab=1;
+  int desktopFairGeneration=0;
+  int get desktopFairLimit => (Platform.numberOfProcessors ~/ 8).clamp(1,4);
+  Future<void> desktopAction(String action) async {
+    if(action=='Input') { final v=await editText('Input',doc.text('seed'));if(v!=null){doc.data['seed']=v.isEmpty?newSeed():v;changed();} }
+    else if(action=='Copy seed') { await Clipboard.setData(ClipboardData(text:doc.text('seed'))); }
+    else if(action=='刷新') { doc.data['seed']=newSeed();changed(); }
+    else { await export(const {'复制':'copyImage','快速保存':'saveImage','保存':'saveAsImage'}[action]??action); }
+  }
+  Future<void> resolveMissingFonts() async {
+    if(!PlatformIO.windows)return;
+    await FontRepository.instance.init();
+    final styles=<Map<String,dynamic>>[for(final value in doc.styles.values) value as Map<String,dynamic>,doc.lyrics];
+    final missing=<String>{};
+    for(final family in styles.map((s)=>'${s['font']??''}').toSet()) {
+      if(family.isNotEmpty&&FontRepository.instance.lookup(family)==null) {
+        final installed=await PlatformIO.desktop.invokeMethod<bool>('fontExists',{'family':family});
+        if(installed!=true)missing.add(family);
+      }
+    }
+    if(missing.isEmpty || !await confirm('配置内有缺失字体，开始查找？') || !mounted)return;
+    final replacements=<String,Map<String,dynamic>>{};
+    final accepted=await showCardDialog<bool>(context:context,builder:(ctx)=>StatefulBuilder(builder:(ctx,update)=>AlertDialog(
+      title:const Text('缺失字体'),content:SizedBox(width:520,child:SingleChildScrollView(child:Column(mainAxisSize:MainAxisSize.min,children:[for(final name in missing) ListTile(title:Text(name),subtitle:Text('${replacements[name]?['font']??'点击指定替换字体'}'),onTap:()async{
+        final result=await PlatformIO.desktop.invokeMapMethod<String,dynamic>('chooseFont',{'family':name});
+        if(result!=null&&ctx.mounted)update(()=>replacements[name]=result);
+      })]))),actions:[TextButton(onPressed:()=>Navigator.pop(ctx,false),child:const Text('取消')),TextButton(onPressed:()=>Navigator.pop(ctx,true),child:const Text('确定'))],
+    )));
+    if(accepted==true) { for(final style in styles) { final replacement=replacements['${style['font']}'];if(replacement!=null)style['font']=replacement['font']; } }
+  }
+  Future<void> loadDesktopFair(int requested,int epoch) async {
+    final token=++desktopFairGeneration;
+    final snapshot=deepCopy(doc.data);
+    final source=cover?.clone();
+    var next=0;
+    final workers=requested.clamp(1,desktopFairLimit);
+    try {
+      await Future.wait(List.generate(workers,(_) async {
+        final localRenderer=CardRenderer(widget.chinese,FontRegistry());
+        try { while(mounted&&token==desktopFairGeneration&&next<20) {
+          final index=next++;
+          final candidate=CardDocument(deepCopy(snapshot));candidate.data['seed']=newSeed();
+          final result=await localRenderer.render(candidate,cover:source,scaleOverride:.25,onOversizedOutput:confirmOversizedOutput);
+          try {
+            if(token!=desktopFairGeneration)break;
+            final bytes=await result.image.toByteData(format:ui.ImageByteFormat.rawRgba);
+            if(bytes!=null&&token==desktopFairGeneration)await PlatformIO.desktop.invokeMethod('fairItem',{'epoch':epoch,'index':index,'seed':result.seed,'width':result.image.width,'height':result.image.height,'bytes':bytes.buffer.asUint8List()});
+          } finally { result.image.dispose(); }
+        }} finally { localRenderer.clearBackgroundCache(); }
+      }));
+    } catch(e) { message('博览会渲染失败：$e'); } finally { source?.dispose(); }
+  }
   String desktopRoot = '';
   bool desktopPreviewOpened = false;
+  bool desktopPreviewHidden = false;
   bool desktopReadySent = false;
   Future<String> ownCover(String path) async {
     final root=await platform.invokeMethod<String>('storageRoot');
@@ -2743,7 +2822,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     await _save(); setState((){}); message('已切换到$desktopRoot');
   });
   Future<void> desktopPreview({bool show=true}) async {
-    final current=rendered; if(current==null)return;
+    final current=rendered; if(current==null||(!show&&desktopPreviewHidden))return;
     final recorder=ui.PictureRecorder(); final canvas=Canvas(recorder);
     final scale=1600/current.image.width;
     final factor=scale<1?scale:1.0;
@@ -2751,9 +2830,10 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     canvas.drawImage(current.image,Offset.zero,Paint()..filterQuality=FilterQuality.high);
     final picture=recorder.endRecording();
     final image=await picture.toImage((current.image.width*factor).round(),(current.image.height*factor).round()); picture.dispose();
-    try { final bytes=await image.toByteData(format:ui.ImageByteFormat.png); if(bytes==null)return;
-      await PlatformIO.desktop.invokeMethod('preview',{'bytes':bytes.buffer.asUint8List(),'show':show || !desktopPreviewOpened,'title':'MusicCardX  ${current.image.width}×${current.image.height}  ${current.milliseconds}ms  ${doc.n('exportScale',1)}x  seed ${current.seed}'});
+    try { final bytes=await image.toByteData(format:ui.ImageByteFormat.rawRgba); if(bytes==null)return;
+      await PlatformIO.desktop.invokeMethod('preview',{'bytes':bytes.buffer.asUint8List(),'width':image.width,'height':image.height,'seed':current.seed,'show':show || !desktopPreviewOpened,'title':'MusicCardX  ${current.image.width}×${current.image.height}  ${current.milliseconds}ms  ${doc.n('exportScale',1)}x  seed ${current.seed}'});
       desktopPreviewOpened=true;
+      if(show)desktopPreviewHidden=false;
       if(!desktopReadySent) {
         desktopReadySent=true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2772,8 +2852,8 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
           await applyIncoming({'kind':'audio','path':path});
         } else if(ext=='json') {
           final text=await File(path).readAsString(); final raw=mapv(jsonDecode(text));
-          if(raw.containsKey('styles') || raw.containsKey('backgroundStyle')) {
-            if(await confirm('导入配置：$path？')) { doc=CardDocument.fromJson(raw); await applyConfigurationPreferences(raw); await _loadCover(); changed(); }
+          if(raw.containsKey('style') || raw.containsKey('backgroundStyle')) {
+            if(await confirm('导入配置：$path？')) { doc=CardDocument.fromJson(raw); await applyConfigurationPreferences(raw); await resolveMissingFonts(); await _loadCover(); changed(); }
           } else { await applyIncoming({'jsonFile':true,'text':text}); }
         } else { message('不支持的文件：$path'); continue; }
         message('已处理 $path');
@@ -2797,14 +2877,6 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       TextButton(onPressed:importConfig,child:const Text('导入配置')),
       TextButton(onPressed:saveConfig,child:const Text('导出配置')),
       TextButton(onPressed:library,child:const Text('选择配置')),
-      TextButton(onPressed:() async {
-        desktopRoot=await platform.invokeMethod<String>('storageRoot')??'';
-        if(!mounted)return;
-        await Navigator.push<void>(context,MaterialPageRoute(builder:(_)=>Scaffold(
-          appBar:AppBar(title:const Text('设置')),
-          body:SingleChildScrollView(child:settingsPage()),
-        )));
-      },child:const Text('设置')),
       TextButton(onPressed:()=>desktopPreview(),child:const Text('预览窗口')),
       TextButton(onPressed:()=>export('saveImage'),child:const Text('快速保存')),
       TextButton(onPressed:()=>export('saveAsImage'),child:const Text('保存')),
@@ -2828,16 +2900,18 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
       Wrap(spacing:4,runSpacing:4,children:styleControls(doc.styles[desktopElement])),
     ]);
     final content=Column(crossAxisAlignment:CrossAxisAlignment.stretch,children:[
-      tools,
-      ExpansionTile(title:const Text('歌曲信息与封面'),initiallyExpanded:true,children:[inputPage()]),
-      backgroundPanel(),colorPanel(),seeds,
-      ExpansionTile(title:const Text('文字样式表格'),initiallyExpanded:true,children:[
-        SingleChildScrollView(scrollDirection:Axis.horizontal,child:textTable()),
-      ]),
-      attributes,lyricsPanel(),
-      if(doc.lyrics['enabled']==true)dividerPanel(),
+      if(desktopTab==0) inputPage() else ...[
+        tools,
+        ExpansionTile(title:const Text('程序与输出设置'),children:[settingsPage()]),
+        backgroundPanel(),colorPanel(),
+        Wrap(spacing:8,runSpacing:4,children:[
+          Text(rendered==null?'正在渲染':'${rendered!.image.width}×${rendered!.image.height} ${rendered!.milliseconds}ms'),
+          ...['Input','Copy seed','刷新','复制','快速保存','保存'].map((label)=>TextButton(onPressed:()=>desktopAction(label),child:Text(label))),
+        ]),seeds,
+        ExpansionTile(title:const Text('文字样式表格'),initiallyExpanded:true,children:[SingleChildScrollView(scrollDirection:Axis.horizontal,child:textTable())]),
+        attributes,lyricsPanel(),if(doc.lyrics['enabled']==true)dividerPanel(),
+      ],
       if(error!=null)Text(error!,style:const TextStyle(color:Colors.red)),
-      Text(rendered==null?'正在渲染':'${rendered!.image.width}×${rendered!.image.height}  ${doc.n('exportScale',1)}x  ${rendered!.milliseconds}ms  ${_rendering?'正在更新':'就绪'}'),
     ]);
     final progress=Center(child:Card(child:Padding(
       padding:const EdgeInsets.all(24),
@@ -2852,7 +2926,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
     },child:Focus(autofocus:true,child:Scaffold(
       appBar:AppBar(title:const Text('MusicCardX')),
       body:Stack(children:[
-        Scrollbar(child:SingleChildScrollView(child:Padding(padding:const EdgeInsets.all(12),child:content))),
+        Row(children:[NavigationRail(selectedIndex:desktopTab,onDestinationSelected:(index){FocusManager.instance.primaryFocus?.unfocus();commitInput();setState(()=>desktopTab=index);},labelType:NavigationRailLabelType.all,destinations:const [NavigationRailDestination(icon:Icon(Icons.edit_note),label:Text('输入')),NavigationRailDestination(icon:Icon(Icons.tune),label:Text('工作台'))]),const VerticalDivider(width:1),Expanded(child:DesktopSmoothScroll(child:Padding(padding:const EdgeInsets.all(12),child:content)))]),
         if(_working)Positioned.fill(child:ColoredBox(color:Colors.black38,child:progress)),
       ]),
     )));
@@ -2872,7 +2946,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
   );
   @override
   Widget build(BuildContext context) {
-    if(PlatformIO.windows) return desktopWorkbench();
+    if(PlatformIO.windows) return Theme(data:Theme.of(context).copyWith(textTheme:Theme.of(context).textTheme.apply(fontFamily:uiFamily??'Segoe UI')),child:desktopWorkbench());
     return Theme(
       data: Theme.of(context).copyWith(
         listTileTheme: Theme.of(context).listTileTheme.copyWith(

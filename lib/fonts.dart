@@ -743,7 +743,7 @@ class FontRepository extends ChangeNotifier {
     final selected = lookup(id);
     if (selected == null) {
       return LoadedFont(
-        null,
+        PlatformIO.windows ? id : null,
         weight: weight ?? (bold ? 700 : 400),
         italic: italic ?? false,
       );

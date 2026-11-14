@@ -17,6 +17,8 @@
 #include <climits>
 #include <cstring>
 #include <fstream>
+#include <commdlg.h>
+#include <commctrl.h>
 using Microsoft::WRL::ComPtr;
 using V=flutter::EncodableValue;using M=flutter::EncodableMap;using L=flutter::EncodableList;
 static HWND owner=nullptr,preview=nullptr;
@@ -60,10 +62,58 @@ static L fontFiles(){
  for(UINT32 i=0;i<collection->GetFontFamilyCount();i++){ComPtr<IDWriteFontFamily>family;check(collection->GetFontFamily(i,&family));for(UINT32 j=0;j<family->GetFontCount();j++){ComPtr<IDWriteFont>font;check(family->GetFont(j,&font));ComPtr<IDWriteFontFace>face;check(font->CreateFontFace(&face));UINT32 n=0;check(face->GetFiles(&n,nullptr));std::vector<IDWriteFontFile*>files(n);check(face->GetFiles(&n,files.data()));for(auto raw:files){ComPtr<IDWriteFontFile>file;file.Attach(raw);ComPtr<IDWriteFontFileLoader>loader;file->GetLoader(&loader);ComPtr<IDWriteLocalFontFileLoader>local;if(FAILED(loader.As(&local)))continue;const void*key=nullptr;UINT32 size=0;check(file->GetReferenceKey(&key,&size));UINT32 length=0;check(local->GetFilePathLengthFromKey(key,size,&length));std::wstring path(length+1,0);check(local->GetFilePathFromKey(key,size,path.data(),length+1));path.resize(length);if(std::find(seen.begin(),seen.end(),path)==seen.end()){seen.push_back(path);result.emplace_back(utf(path));}}}}
  return result;
 }
+static HFONT uiFont=nullptr;
+static void setUiFont(HWND parent){
+ if(!uiFont){NONCLIENTMETRICS n{};n.cbSize=sizeof(n);SystemParametersInfo(SPI_GETNONCLIENTMETRICS,sizeof(n),&n,0);n.lfMessageFont.lfQuality=ANTIALIASED_QUALITY;uiFont=CreateFontIndirect(&n.lfMessageFont);}
+ EnumChildWindows(parent,[](HWND child,LPARAM)->BOOL{SendMessage(child,WM_SETFONT,(WPARAM)uiFont,TRUE);return TRUE;},0);
+}
+static void emit(const char*method,V value){if(channel)channel->InvokeMethod(method,std::make_unique<V>(std::move(value)));}
+static std::vector<uint8_t> rgbaPixels(const M&a,UINT&w,UINT&h){
+ auto width=get(a,"width"),height=get(a,"height");w=UINT(std::get<int32_t>(width));h=UINT(std::get<int32_t>(height));
+ auto bytes=std::get<std::vector<uint8_t>>(get(a,"bytes"));if(w<1||h<1||size_t(w)*h*4!=bytes.size())throw std::runtime_error("Invalid RGBA buffer");
+ for(size_t i=0;i<bytes.size();i+=4)std::swap(bytes[i],bytes[i+2]);return bytes;
+}
+static void drawImage(HDC dc,const std::vector<uint8_t>&pixels,UINT w,UINT h,RECT area){
+ if(!w||!h||pixels.empty())return;
+ const double scale=std::min(double(area.right-area.left)/w,double(area.bottom-area.top)/h);
+ const int width=int(w*scale),height=int(h*scale);
+ BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=w;info.bmiHeader.biHeight=-LONG(h);info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+ SetStretchBltMode(dc,HALFTONE);StretchDIBits(dc,area.left+(area.right-area.left-width)/2,area.top+(area.bottom-area.top-height)/2,width,height,0,0,w,h,pixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+}
+static const char* previewActions[]={"Input","Copy seed","刷新","复制","快速保存","保存"};
 static LRESULT CALLBACK previewProc(HWND h,UINT m,WPARAM w,LPARAM l){
- if(m==WM_COMMAND){const char*action=LOWORD(w)==1?"saveImage":LOWORD(w)==2?"saveAsImage":"copyImage";channel->InvokeMethod("previewAction",std::make_unique<V>(action));return 0;}
- if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);FillRect(dc,&r,(HBRUSH)(COLOR_WINDOW+1));if(pw&&ph){double scale=std::min(double(r.right)/pw,double(std::max(1L,r.bottom-48))/ph);int width=int(pw*scale),height=int(ph*scale);BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=pw;info.bmiHeader.biHeight=-LONG(ph);info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;SetStretchBltMode(dc,HALFTONE);StretchDIBits(dc,(r.right-width)/2,48,width,height,0,0,pw,ph,previewPixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);}EndPaint(h,&ps);return 0;}
- if(m==WM_CLOSE){ShowWindow(h,SW_HIDE);return 0;}return DefWindowProc(h,m,w,l);
+ if(m==WM_COMMAND){int id=LOWORD(w);if(id>=1&&id<=6){if(id==1)SetForegroundWindow(owner);emit("previewAction",V(previewActions[id-1]));}return 0;}
+ if(m==WM_SIZE){int width=LOWORD(l);for(int i=0;i<6;i++)MoveWindow(GetDlgItem(h,i+1),8+i*92,8,88,28,TRUE);MoveWindow(GetDlgItem(h,20),8,40,std::max(1,width-16),24,TRUE);InvalidateRect(h,nullptr,FALSE);return 0;}
+ if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);FillRect(dc,&r,(HBRUSH)(COLOR_WINDOW+1));r.top=72;drawImage(dc,previewPixels,pw,ph,r);EndPaint(h,&ps);return 0;}
+ if(m==WM_DPICHANGED){auto*r=(RECT*)l;SetWindowPos(h,nullptr,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER|SWP_NOACTIVATE);return 0;}
+ if(m==WM_CLOSE){emit("previewClosed",V());ShowWindow(h,SW_HIDE);return 0;}return DefWindowProc(h,m,w,l);
+}
+struct FairItem{std::string seed;UINT width=0,height=0;std::vector<uint8_t>pixels;};
+static HWND fair=nullptr;static std::vector<FairItem> fairItems(20);static int fairColumns=2,fairWorkers=1,fairLimit=1,fairScroll=0,fairTarget=0;static int fairEpoch=0;
+static constexpr const wchar_t* preferences=L"Software\\IQ Online Studio\\MusicCardX";
+static DWORD pref(const wchar_t*key,DWORD fallback){DWORD value=0,n=sizeof(value);return RegGetValue(HKEY_CURRENT_USER,preferences,key,RRF_RT_REG_DWORD,nullptr,&value,&n)==ERROR_SUCCESS?value:fallback;}
+static void savePref(const wchar_t*key,DWORD value){HKEY h;if(RegCreateKeyEx(HKEY_CURRENT_USER,preferences,0,nullptr,0,KEY_SET_VALUE,nullptr,&h,nullptr)==ERROR_SUCCESS){RegSetValueEx(h,key,0,REG_DWORD,(BYTE*)&value,sizeof(value));RegCloseKey(h);}}
+static void loadFair(){fairItems.assign(20,FairItem{});fairScroll=fairTarget=0;InvalidateRect(fair,nullptr,TRUE);emit("fairLoad",V(M{{V("workers"),V(fairWorkers)},{V("epoch"),V(++fairEpoch)}}));}
+static int fairCellWidth(HWND h){RECT r;GetClientRect(h,&r);return std::max(20,(r.right-24)/fairColumns);}
+static void clampFair(){if(!fair)return;RECT r;GetClientRect(fair,&r);int rows=(20+fairColumns-1)/fairColumns;int maximum=std::max(0,rows*(fairCellWidth(fair)*9/16+36)-(r.bottom-64));fairTarget=std::clamp(fairTarget,0,maximum);}
+static LRESULT CALLBACK fairProc(HWND h,UINT m,WPARAM w,LPARAM l){
+ if(m==WM_COMMAND){int id=LOWORD(w);
+  if(id==35){wchar_t text[20];GetWindowText(GetDlgItem(h,34),text,20);fairWorkers=std::clamp(_wtoi(text),1,fairLimit);loadFair();}
+  if(id==32&&HIWORD(w)==EN_KILLFOCUS){wchar_t text[20];GetWindowText(GetDlgItem(h,32),text,20);fairColumns=std::clamp(_wtoi(text),1,10);SetWindowText(GetDlgItem(h,32),std::to_wstring(fairColumns).c_str());SendMessage(GetDlgItem(h,31),TBM_SETPOS,TRUE,fairColumns);clampFair();InvalidateRect(h,nullptr,TRUE);}
+  return 0;
+ }
+ if(m==WM_HSCROLL){fairColumns=int(SendMessage(GetDlgItem(h,31),TBM_GETPOS,0,0));SetWindowText(GetDlgItem(h,32),std::to_wstring(fairColumns).c_str());clampFair();InvalidateRect(h,nullptr,TRUE);return 0;}
+ if(m==WM_MOUSEWHEEL){fairTarget-=GET_WHEEL_DELTA_WPARAM(w);clampFair();SetTimer(h,7,16,nullptr);return 0;}
+ if(m==WM_TIMER&&w==7){int distance=fairTarget-fairScroll;fairScroll+=std::abs(distance)<3?distance:distance/4;InvalidateRect(h,nullptr,FALSE);if(fairScroll==fairTarget)KillTimer(h,7);return 0;}
+ if(m==WM_SIZE){clampFair();InvalidateRect(h,nullptr,TRUE);return 0;}
+ if(m==WM_LBUTTONUP){int x=short(LOWORD(l)),y=short(HIWORD(l));if(y<64)return 0;int cw=fairCellWidth(h),rh=cw*9/16+36;int index=((y-64+fairScroll)/rh)*fairColumns+(x-8)/cw;if(index>=0&&index<20&&!fairItems[index].seed.empty()){emit("fairSeed",V(fairItems[index].seed));SendMessage(h,WM_CLOSE,0,0);}return 0;}
+ if(m==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r;GetClientRect(h,&r);HDC buffer=CreateCompatibleDC(dc);HBITMAP bitmap=CreateCompatibleBitmap(dc,std::max(1L,r.right),std::max(1L,r.bottom));auto old=SelectObject(buffer,bitmap);FillRect(buffer,&r,(HBRUSH)(COLOR_WINDOW+1));SelectObject(buffer,uiFont);SetBkMode(buffer,TRANSPARENT);
+  int cw=fairCellWidth(h),rh=cw*9/16+36;IntersectClipRect(buffer,0,64,r.right,r.bottom);
+  for(int i=0;i<20;i++){int y=64+(i/fairColumns)*rh-fairScroll;if(y+rh<64||y>r.bottom)continue;RECT cell{8+(i%fairColumns)*cw,y,8+(i%fairColumns+1)*cw-8,y+rh-28};drawImage(buffer,fairItems[i].pixels,fairItems[i].width,fairItems[i].height,cell);cell.top=cell.bottom;cell.bottom+=24;auto label=wide(fairItems[i].seed.empty()?"正在生成…":fairItems[i].seed);DrawText(buffer,label.c_str(),-1,&cell,DT_CENTER|DT_SINGLELINE);}
+  BitBlt(dc,0,64,r.right,std::max(0L,r.bottom-64),buffer,0,64,SRCCOPY);SelectObject(buffer,old);DeleteObject(bitmap);DeleteDC(buffer);EndPaint(h,&ps);return 0;
+ }
+ if(m==WM_CLOSE){WINDOWPLACEMENT pos{};pos.length=sizeof(pos);GetWindowPlacement(h,&pos);savePref(L"fairWidth",pos.rcNormalPosition.right-pos.rcNormalPosition.left);savePref(L"fairHeight",pos.rcNormalPosition.bottom-pos.rcNormalPosition.top);savePref(L"fairMaximized",IsZoomed(h));savePref(L"fairColumns",fairColumns);savePref(L"fairWorkers",fairWorkers);emit("fairClose",V());fairItems.assign(20,FairItem{});ShowWindow(h,SW_HIDE);return 0;}
+ return DefWindowProc(h,m,w,l);
 }
 void NativeRequestClose(){
  if(!channel){PostMessage(owner,WM_APP+1,0,0);return;}
@@ -72,7 +122,7 @@ void NativeRequestClose(){
   [](const std::string&,const std::string&,const V*){PostMessage(owner,WM_APP+1,0,0);},
   [](){PostMessage(owner,WM_APP+1,0,0);}));
 }
-void NativeClose(){if(preview)DestroyWindow(preview);channel.reset();}
+void NativeClose(){if(preview)DestroyWindow(preview);if(fair)DestroyWindow(fair);if(uiFont)DeleteObject(uiFont);channel.reset();}
 void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  channel=std::make_unique<flutter::MethodChannel<V>>(c->engine()->messenger(),"com.iqonli.musiccardx/windows",&flutter::StandardMethodCodec::GetInstance());
  channel->SetMethodCallHandler([](const flutter::MethodCall<V>&call,std::unique_ptr<flutter::MethodResult<V>>result){try{
@@ -107,10 +157,35 @@ void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  }
  else if(IsClipboardFormatAvailable(CF_UNICODETEXT)){HGLOBAL data=GetClipboardData(CF_UNICODETEXT);auto*p=(wchar_t*)GlobalLock(data);if(p){value={{V("text"),V(utf(p))}};GlobalUnlock(data);}}
  CloseClipboard();}catch(...){CloseClipboard();throw;}result->Success(V(value));}
+ else if(m=="fontExists"){
+ ComPtr<IDWriteFactory>factory;check(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(factory.GetAddressOf())));ComPtr<IDWriteFontCollection>collection;check(factory->GetSystemFontCollection(&collection));UINT32 index=0;BOOL exists=FALSE;check(collection->FindFamilyName(wide(str(a,"family")).c_str(),&index,&exists));result->Success(V(exists!=FALSE));
+ }
+ else if(m=="chooseFont"){
+ LOGFONT font{};auto name=wide(str(a,"family"));wcsncpy_s(font.lfFaceName,name.c_str(),_TRUNCATE);font.lfWeight=400;
+ auto weight=get(a,"weight");if(auto value=std::get_if<int32_t>(&weight))font.lfWeight=*value;
+ font.lfItalic=get(a,"italic")==V(true);font.lfHeight=-18;font.lfCharSet=DEFAULT_CHARSET;
+ CHOOSEFONT dialog{};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=owner;dialog.lpLogFont=&font;dialog.Flags=CF_SCREENFONTS|CF_INITTOLOGFONTSTRUCT|CF_NOSCRIPTSEL|CF_NOVERTFONTS;
+ if(ChooseFont(&dialog))result->Success(V(M{{V("font"),V(utf(font.lfFaceName))},{V("weight"),V(int32_t(font.lfWeight))},{V("italic"),V(font.lfItalic!=0)}}));else if(CommDlgExtendedError()!=0)throw std::runtime_error("Font dialog failed");else result->Success();
+ }
+ else if(m=="getGpuPreference"){result->Success(V(pref(L"highPerformanceGpu",1)!=0));}
+ else if(m=="gpuPreference"){savePref(L"highPerformanceGpu",get(a,"enabled")==V(true)?1:0);result->Success();}
+ else if(m=="fairOpen"){
+ fairLimit=std::max(1,std::get<int32_t>(get(a,"limit")));fairColumns=std::clamp(int(pref(L"fairColumns",2)),1,10);fairWorkers=std::clamp(int(pref(L"fairWorkers",1)),1,fairLimit);
+ if(!fair){WNDCLASS wc{};wc.hInstance=GetModuleHandle(nullptr);wc.lpszClassName=L"MusicCardXFair";wc.lpfnWndProc=fairProc;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hIcon=LoadIcon(wc.hInstance,MAKEINTRESOURCE(101));RegisterClass(&wc);fair=CreateWindow(wc.lpszClassName,L"种子博览会",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,0,0,1200,800,nullptr,nullptr,wc.hInstance,nullptr);
+ auto control=[&](const wchar_t*type,const wchar_t*label,DWORD style,int x,int width,int id){CreateWindow(type,label,WS_CHILD|WS_VISIBLE|style,x,12,width,28,fair,(HMENU)(INT_PTR)id,wc.hInstance,nullptr);};
+ control(L"STATIC",L"每行显示",0,8,70,30);control(TRACKBAR_CLASS,L"",TBS_HORZ,80,180,31);SendMessage(GetDlgItem(fair,31),TBM_SETRANGE,TRUE,MAKELPARAM(1,10));control(L"EDIT",L"2",WS_BORDER|ES_NUMBER,268,45,32);control(L"STATIC",L"渲染并发",0,330,70,33);control(L"EDIT",L"1",WS_BORDER|ES_NUMBER,406,45,34);control(L"BUTTON",L"生成20个",BS_PUSHBUTTON,466,100,35);setUiFont(fair);
+ }
+ SendMessage(GetDlgItem(fair,31),TBM_SETPOS,TRUE,fairColumns);SetWindowText(GetDlgItem(fair,32),std::to_wstring(fairColumns).c_str());SetWindowText(GetDlgItem(fair,34),std::to_wstring(fairWorkers).c_str());
+ RECT screen;SystemParametersInfo(SPI_GETWORKAREA,0,&screen,0);int width=std::min(int(pref(L"fairWidth",1200)),int(screen.right-screen.left)),height=std::min(int(pref(L"fairHeight",800)),int(screen.bottom-screen.top));SetWindowPos(fair,nullptr,screen.left+(screen.right-screen.left-width)/2,screen.top+(screen.bottom-screen.top-height)/2,width,height,SWP_NOZORDER);ShowWindow(fair,pref(L"fairMaximized",1)?SW_MAXIMIZE:SW_SHOWNORMAL);SetForegroundWindow(fair);loadFair();result->Success();
+ }
+ else if(m=="fairItem"){
+ if(std::get<int32_t>(get(a,"epoch"))!=fairEpoch){result->Success();return;}int index=std::get<int32_t>(get(a,"index"));if(index<0||index>=20)throw std::runtime_error("Invalid fair index");fairItems[index].pixels=rgbaPixels(a,fairItems[index].width,fairItems[index].height);fairItems[index].seed=str(a,"seed");if(fair)InvalidateRect(fair,nullptr,FALSE);result->Success();
+ }
  else if(m=="preview"){
- auto bytes=std::get<std::vector<uint8_t>>(get(a,"bytes"));previewPixels=decode(bytes,pw,ph);
- if(!preview){WNDCLASS wc{};wc.hInstance=GetModuleHandle(nullptr);wc.lpszClassName=L"MusicCardXPreview";wc.lpfnWndProc=previewProc;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hIcon=LoadIcon(GetModuleHandle(nullptr),MAKEINTRESOURCE(101));RegisterClass(&wc);preview=CreateWindow(wc.lpszClassName,L"预览",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,900,600,nullptr,nullptr,wc.hInstance,nullptr);const wchar_t*labels[]={L"快速保存",L"保存",L"复制"};for(int i=0;i<3;i++)CreateWindow(L"BUTTON",labels[i],WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,8+i*98,8,92,30,preview,(HMENU)(INT_PTR)(i+1),wc.hInstance,nullptr);}
- SetWindowText(preview,wide(str(a,"title")).c_str());InvalidateRect(preview,nullptr,TRUE);if(get(a,"show")==V(true))ShowWindow(preview,SW_SHOWNORMAL);result->Success();}
+ previewPixels=rgbaPixels(a,pw,ph);
+ if(!preview){WNDCLASS wc{};wc.hInstance=GetModuleHandle(nullptr);wc.lpszClassName=L"MusicCardXPreview";wc.lpfnWndProc=previewProc;wc.hCursor=LoadCursor(nullptr,IDC_ARROW);wc.hIcon=LoadIcon(wc.hInstance,MAKEINTRESOURCE(101));RegisterClass(&wc);preview=CreateWindow(wc.lpszClassName,L"预览",WS_OVERLAPPEDWINDOW|WS_CLIPCHILDREN,CW_USEDEFAULT,CW_USEDEFAULT,1000,650,nullptr,nullptr,wc.hInstance,nullptr);const wchar_t*labels[]={L"Input",L"Copy seed",L"刷新",L"复制",L"快速保存",L"保存"};for(int i=0;i<6;i++)CreateWindow(L"BUTTON",labels[i],WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,8+i*92,8,88,28,preview,(HMENU)(INT_PTR)(i+1),wc.hInstance,nullptr);CreateWindow(L"STATIC",L"",WS_CHILD|WS_VISIBLE,8,40,950,24,preview,(HMENU)20,wc.hInstance,nullptr);setUiFont(preview);}
+ SetWindowText(preview,wide(str(a,"title")).c_str());SetWindowText(GetDlgItem(preview,20),wide(str(a,"title")).c_str());InvalidateRect(preview,nullptr,FALSE);if(get(a,"show")==V(true))ShowWindow(preview,SW_SHOWNORMAL);result->Success();
+ }
  else result->NotImplemented();
  }catch(const std::exception&e){result->Error("windows",e.what());}});
 }
