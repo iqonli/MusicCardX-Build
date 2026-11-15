@@ -2438,7 +2438,7 @@ class _EditorState extends State<Editor> with WidgetsBindingObserver {
         Wrap(children:[TextButton(onPressed:()=>switchStorage(false),child:const Text('程序目录Config')),TextButton(onPressed:()=>switchStorage(true),child:const Text('LocalAppData'))]),
       ]),
       if(PlatformIO.windows) normalSection('GPU',[
-        ListTile(title:const Text('界面渲染器'),subtitle:const Text('重启生效，两种后端均可使用GPU'),trailing:DropdownButton<String>(value:desktopRenderer,items:const [DropdownMenuItem(value:'Skia',child:Text('Skia')),DropdownMenuItem(value:'Impeller',child:Text('Impeller'))],onChanged:(value)async{if(value==null)return;await PlatformIO.desktop.invokeMethod('setRenderer',{'renderer':value});if(mounted)setState(()=>desktopRenderer=value);})),
+        ListTile(title:const Text('界面渲染器'),subtitle:const Text('重启生效，两种后端均可使用GPU'),trailing:DropdownButton<String>(value:desktopRenderer,items:const [DropdownMenuItem(value:'Skia',child:Text('Skia')),DropdownMenuItem(value:'Impeller',child:Text('Impeller（实验）'))],onChanged:(value)async{if(value==null)return;await PlatformIO.desktop.invokeMethod('setRenderer',{'renderer':value});if(mounted)setState(()=>desktopRenderer=value);})),
         SwitchListTile(title:const Text('优先高性能GPU'),subtitle:const Text('重启生效，背景算法仍使用CPU'),value:desktopPreferGpu,onChanged:(value)async{await PlatformIO.desktop.invokeMethod('gpuPreference',{'enabled':value});setState(()=>desktopPreferGpu=value);}),
       ]),
       normalSection('显示', [
