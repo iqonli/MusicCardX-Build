@@ -1,4 +1,6 @@
+param([ValidateSet('skia','impeller')][string]$Renderer='skia')
 $ErrorActionPreference='Stop'
+if (-not ('McxWindow' -as [type])) {
 Add-Type @'
 using System;
 using System.Text;
@@ -9,6 +11,8 @@ public static class McxWindow {
  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr parent,uint command);
  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left,top,right,bottom; }
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out Rect rect);
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int command);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
  public delegate bool EnumProc(IntPtr h,IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p,IntPtr l);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);
@@ -17,9 +21,12 @@ public static class McxWindow {
  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
 }
 '@
+}
 $temp=Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString())
 New-Item $temp -ItemType Directory | Out-Null
 $process=$null
+$diagnostics=Join-Path $PWD "diagnostics/$Renderer"
+New-Item $diagnostics -ItemType Directory -Force | Out-Null
 try {
  Expand-Archive dist/MusicCardX-Windows-app-x64.zip $temp
  if(Test-Path "$temp/flutter_windows.dll") { throw 'APP package unexpectedly contains Flutter DLL' }
@@ -28,8 +35,8 @@ try {
  $hash=(Get-FileHash "$temp/flutter_windows.dll" -Algorithm SHA256).Hash.ToLower()
  if($hash -ne $requirement.sha256) { throw 'Flutter runtime does not match APP package' }
  $env:MCX_SMOKE_REPORT=Join-Path $temp 'ready.txt'
- New-Item diagnostics -ItemType Directory -Force | Out-Null
- $process=Start-Process "$temp/MusicCardX.exe" -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput "$PWD/diagnostics/stdout.txt" -RedirectStandardError "$PWD/diagnostics/stderr.txt" -PassThru
+
+ $process=Start-Process "$temp/MusicCardX.exe" -ArgumentList "--renderer=$Renderer" -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput "$diagnostics/stdout.txt" -RedirectStandardError "$diagnostics/stderr.txt" -PassThru
  $deadline=(Get-Date).AddSeconds(60)
  while (!(Test-Path $env:MCX_SMOKE_REPORT)) {
   if($process.HasExited) { throw "Application exited before editor readiness: $($process.ExitCode)" }
@@ -42,6 +49,7 @@ try {
   [void][McxWindow]::GetWindowThreadProcessId($h,[ref]$pidValue)
   $name=New-Object Text.StringBuilder 128
   [void][McxWindow]::GetClassName($h,$name,128)
+  if($pidValue -eq $process.Id -and $name.ToString() -eq 'MusicCardXPreview') { [void][McxWindow]::ShowWindow($h,0) }
   if($pidValue -eq $process.Id -and $name.ToString() -eq 'MusicCardXDesktop') { $script:handle=$h }
   return $true
  },[IntPtr]::Zero) | Out-Null
@@ -53,9 +61,10 @@ try {
  $childClass=New-Object Text.StringBuilder 128
  [void][McxWindow]::GetClassName($child,$childClass,128)
  Write-Output "Native Flutter child class: $childClass"
+ [void][McxWindow]::SetForegroundWindow($script:handle)
  $times=@()
  for($i=0;$i -lt 40;$i++) {
-  if($i % 10 -eq 0) { [void][McxWindow]::SetWindowPos($script:handle,[IntPtr]::Zero,0,0,(1000+($i%20)*10),800,6) }
+  if($i % 10 -eq 0) { [void][McxWindow]::SetWindowPos($script:handle,[IntPtr]::Zero,0,0,(900+($i%20)*10),650,6) }
   $delta=if($i -lt 20){-120}else{120}
   $rect=New-Object McxWindow+Rect
   [void][McxWindow]::GetWindowRect($child,[ref]$rect)
@@ -69,24 +78,32 @@ try {
   Start-Sleep -Milliseconds 25
  }
  $sorted=@($times | Sort-Object)
- @{nativeMessageP95Ms=$sorted[[int]($sorted.Count*.95)-1];nativeMessageMaxMs=$sorted[-1];samples=$times.Count;note='Native message responsiveness, not Flutter frame times'} | ConvertTo-Json | Tee-Object diagnostics/interaction.json
- if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" diagnostics/startup.log -Force }
+ @{nativeMessageP95Ms=$sorted[[int]($sorted.Count*.95)-1];nativeMessageMaxMs=$sorted[-1];samples=$times.Count;note='Native message responsiveness, not Flutter frame times'} | ConvertTo-Json | Tee-Object "$diagnostics/interaction.json"
+ if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" "$diagnostics/startup.log" -Force }
+ # Capture the actual desktop UI at the end of the workload for font inspection.
+ Add-Type -AssemblyName System.Windows.Forms
+ Add-Type -AssemblyName System.Drawing
+ $bounds=[Windows.Forms.SystemInformation]::VirtualScreen
+ $bitmap=New-Object Drawing.Bitmap $bounds.Width,$bounds.Height
+ $graphics=[Drawing.Graphics]::FromImage($bitmap)
+ try { $graphics.CopyFromScreen($bounds.Location,[Drawing.Point]::Empty,$bounds.Size);$bitmap.Save("$diagnostics/desktop.png") }
+ finally { $graphics.Dispose();$bitmap.Dispose() }
  [void][McxWindow]::PostMessage($script:handle,0x10,[IntPtr]::Zero,[IntPtr]::Zero)
  if(!$process.WaitForExit(8000)) { throw 'Window close stalled' }
  if($process.ExitCode -ne 0) { throw "Application exited with code $($process.ExitCode)" }
- if(Test-Path "$env:MCX_SMOKE_REPORT.frames.json") { Copy-Item "$env:MCX_SMOKE_REPORT.frames.json" diagnostics/frames.json;Get-Content diagnostics/frames.json }
+ if(Test-Path "$env:MCX_SMOKE_REPORT.frames.json") { Copy-Item "$env:MCX_SMOKE_REPORT.frames.json" "$diagnostics/frames.json";Get-Content "$diagnostics/frames.json" }
  else { throw 'Release frame metrics were not written' }
  'Editor initialized, wheel/resize exercised, and native main window closed successfully.'
 } catch {
- if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" diagnostics/startup.log -Force; Get-Content diagnostics/startup.log }
- Get-Content diagnostics/stderr.txt -ErrorAction SilentlyContinue
+ if(Test-Path "$env:MCX_SMOKE_REPORT.log") { Copy-Item "$env:MCX_SMOKE_REPORT.log" "$diagnostics/startup.log" -Force; Get-Content "$diagnostics/startup.log" }
+ Get-Content "$diagnostics/stderr.txt" -ErrorAction SilentlyContinue
  try {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
   $bounds=[Windows.Forms.SystemInformation]::VirtualScreen
   $bitmap=New-Object Drawing.Bitmap $bounds.Width,$bounds.Height
   $graphics=[Drawing.Graphics]::FromImage($bitmap)
-  try { $graphics.CopyFromScreen($bounds.Location,[Drawing.Point]::Empty,$bounds.Size);$bitmap.Save("$PWD/diagnostics/desktop.png") }
+  try { $graphics.CopyFromScreen($bounds.Location,[Drawing.Point]::Empty,$bounds.Size);$bitmap.Save("$diagnostics/desktop.png") }
   finally { $graphics.Dispose();$bitmap.Dispose() }
  } catch { Write-Warning "Screenshot unavailable: $_" }
  throw

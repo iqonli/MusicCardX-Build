@@ -28,6 +28,10 @@ int APIENTRY wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show) {
  HWND window=CreateWindow(wc.lpszClassName,L"MusicCardX",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,1280,800,nullptr,nullptr,instance,nullptr);
  wchar_t exe[32768];GetModuleFileName(nullptr,exe,32768);std::wstring path(exe);path=path.substr(0,path.find_last_of(L"\\/"));
  flutter::DartProject project(path+L"\\data");DWORD prefer=1,bytes=sizeof(prefer);RegGetValue(HKEY_CURRENT_USER,L"Software\\IQ Online Studio\\MusicCardX",L"highPerformanceGpu",RRF_RT_REG_DWORD,nullptr,&prefer,&bytes);
+ DWORD renderer=0,rendererBytes=sizeof(renderer);RegGetValue(HKEY_CURRENT_USER,L"Software\\IQ Online Studio\\MusicCardX",L"impeller",RRF_RT_REG_DWORD,nullptr,&renderer,&rendererBytes);
+ int argc=0;LPWSTR* argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+ if(argv){for(int i=1;i<argc;i++){if(wcscmp(argv[i],L"--renderer=skia")==0)renderer=0;else if(wcscmp(argv[i],L"--renderer=impeller")==0)renderer=1;}LocalFree(argv);}
+ project.set_impeller_switch(renderer?flutter::ImpellerSwitch::Enabled:flutter::ImpellerSwitch::Disabled);
  project.set_gpu_preference(prefer?flutter::GpuPreference::HighPerformancePreference:flutter::GpuPreference::NoPreference);
  project.set_ui_thread_policy(flutter::UIThreadPolicy::RunOnSeparateThread);
  controller=std::make_unique<flutter::FlutterViewController>(1280,800,project);

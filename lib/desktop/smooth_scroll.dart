@@ -44,7 +44,7 @@ class _DesktopSmoothScrollState extends State<DesktopSmoothScroll> {
     onPointerDown:(_){if(controller.hasClients)controller.jumpTo(controller.offset);},
     child:Scrollbar(controller:controller,child:widget.children != null
       ? ListView(controller:controller,physics:const ClampingScrollPhysics(),
-          padding:widget.padding,cacheExtent:200,children:widget.children!)
+          padding:widget.padding,children:widget.children!)
       : SingleChildScrollView(controller:controller,physics:const ClampingScrollPhysics(),
           padding:widget.padding,child:RepaintBoundary(child:widget.child!))),
   );

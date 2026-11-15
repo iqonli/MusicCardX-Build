@@ -188,6 +188,8 @@ void InstallNative(flutter::FlutterViewController*c,HWND window){owner=window;
  CHOOSEFONT dialog{};dialog.lStructSize=sizeof(dialog);dialog.hwndOwner=owner;dialog.lpLogFont=&font;dialog.Flags=CF_SCREENFONTS|CF_INITTOLOGFONTSTRUCT|CF_NOSCRIPTSEL|CF_NOVERTFONTS;
  if(ChooseFont(&dialog))result->Success(V(M{{V("font"),V(utf(font.lfFaceName))},{V("weight"),V(int32_t(font.lfWeight))},{V("italic"),V(font.lfItalic!=0)}}));else if(CommDlgExtendedError()!=0)throw std::runtime_error("Font dialog failed");else result->Success();
  }
+ else if(m=="getRenderer"){result->Success(V(pref(L"impeller",0)?"Impeller":"Skia"));}
+ else if(m=="setRenderer"){savePref(L"impeller",str(a,"renderer")=="Impeller");result->Success();}
  else if(m=="getGpuPreference"){result->Success(V(pref(L"highPerformanceGpu",1)!=0));}
  else if(m=="gpuPreference"){savePref(L"highPerformanceGpu",get(a,"enabled")==V(true)?1:0);result->Success();}
  else if(m=="fairOpen"){

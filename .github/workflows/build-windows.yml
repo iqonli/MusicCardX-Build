@@ -56,7 +56,9 @@ jobs:
       - name: Package runnable portable directory and source
         run: ./tool/windows/package.ps1
       - name: Launch packaged editor and verify close
-        run: ./tool/windows/startup_smoke.ps1
+        run: |
+          ./tool/windows/startup_smoke.ps1 -Renderer skia
+          ./tool/windows/startup_smoke.ps1 -Renderer impeller
       - name: Upload APP without Flutter DLL
         uses: actions/upload-artifact@v4
         with:

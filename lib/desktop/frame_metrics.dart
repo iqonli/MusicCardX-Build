@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/scheduler.dart';
 
 /// Enabled only by the external release-package CI probe; no production polling.
